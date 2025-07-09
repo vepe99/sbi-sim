@@ -5,6 +5,8 @@ import datetime
 import sys
 from gc import callbacks
 from pathlib import Path
+from autocvd import autocvd
+autocvd(num_gpus = 1)
 
 import wandb
 from omegaconf import OmegaConf

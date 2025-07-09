@@ -262,3 +262,9 @@ class TwoMoons(GeneratorDataloader):
 
     def __init__(self, *args, **kwargs):
         super().__init__("two_moons", *args, **kwargs)
+
+class Odisseo(GeneratorDataloader):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__("odisseo", *args, **kwargs)
+
