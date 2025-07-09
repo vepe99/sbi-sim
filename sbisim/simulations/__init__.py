@@ -1,1 +1,1 @@
-from .benchmark import LotkaVolterraSimulator, TwoMoonsSimulator, SLCPSimulator, SIRSimulator, SBISimulator
+from .benchmark import LotkaVolterraSimulator, TwoMoonsSimulator, SLCPSimulator, SIRSimulator, SBISimulator, OdisseoSimulator

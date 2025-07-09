@@ -67,12 +67,11 @@ strategy:
         activation_fn: gelu
     weight_file_pretrained: ${weight_file_pretrained}
     model:
-      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorLV
+      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseo
       params:
         simulator:
-          target: sbisim.simulations.LotkaVolterraSimulator
+          target: sbisim.simulations.OdisseoSimulator
           params:
-            type: jax
         start_time: ${start_time}
         controlled_flow:
           target: sbisim.flows.models.fmpe.DenseResidualNet

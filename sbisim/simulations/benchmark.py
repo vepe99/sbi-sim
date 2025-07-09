@@ -32,6 +32,7 @@ class SBISimulator:
 
 
 class OdisseoSimulator(SBISimulator):
+
     code_length = 10.0 * u.kpc
     code_mass = 1e4 * u.Msun
     code_time = 3 * u.Gyr
@@ -50,7 +51,18 @@ class OdisseoSimulator(SBISimulator):
 
     def run_simulation(self, 
                        rng_key, 
-                       params_samples):
+                       params):
+        params_samples = SimulationParams(t_end = params[0],
+                        Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time)),
+                        NFW_params = NFWParams(Mvir=params[2] * u.Msun.to(self.code_units.code_mass),
+                                               r_s= (16.0 * u.kpc).to(self.code_units.code_length).value,),
+                        MN_params = MNParams(M = params[3] * u.Msun.to(self.code_units.code_mass),
+                                             a = (3.0 * u.kpc).to(self.code_units.code_length).value,
+                                            b = (0.280 * u.kpc).to(self.code_units.code_length).value),
+                        PSP_params= PSPParams(M = 4501365375.06545 * u.Msun.to(self.code_units.code_mass),
+                                                alpha = 1.8, 
+                                                r_c = (1.9*u.kpc).to(self.code_units.code_length).value),  
+                        G = self.code_units.G, )
 
         params_com = params_samples._replace(t_end=-params_samples.t_end,)
         mass_com = jnp.array([params_samples.Plummer_params.Mtot]) 
@@ -98,43 +110,39 @@ class OdisseoSimulator(SBISimulator):
     def __call__(self, params,  num_simulations, rng, 
                  normalize=True, deterministic=False):
         
-        params_samples = SimulationParams(t_end = params[0],
-                        Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time)),
-                        NFW_params = NFWParams(Mvir=params[2] * u.Msun.to(self.code_units.code_mass),
-                                               r_s= (16.0 * u.kpc).to(self.code_units.code_length).value,),
-                        MN_params = MNParams(M = params[3] * u.Msun.to(self.code_units.code_mass),
-                                             a = (3.0 * u.kpc).to(self.code_units.code_length).value,
-                                            b = (0.280 * u.kpc).to(self.code_units.code_length).value),
-                        PSP_params= PSPParams(M = 4501365375.06545 * u.Msun.to(self.code_units.code_mass),
-                                                alpha = 1.8, 
-                                                r_c = (1.9*u.kpc).to(self.code_units.code_length).value),  
-                        G = self.code_units.G, )
         
         if normalize:
+            #not sure about this
             params = params * self.std_X + self.mean_X
 
         batch_size = params.shape[0]
-        
-        streams = self.run_simulation(rng, params_samples)
 
+        X = jnp.repeat(params, batch_size)
+        Y = self.run_simulation(rng, params)
+        Y = jnp.repeat(Y, batch_size)
 
-        if normalize:
-            # Normalize the streams if required
-            samples_y = (streams - jnp.mean(streams, axis=0)) / jnp.std(streams, axis=0)
-        
         if deterministic:
             pass
         else:
-            sample_y =  self.add_noise(x=streams, rng=rng)
+            Y =  self.add_noise(x=Y, rng=rng)
 
-            
+        if normalize:
+            # Normalize the streams if required
+            Y = (Y - jnp.mean(Y, axis=0)) / jnp.std(Y, axis=0)
 
-
+        Y, _, _ = jnp.histogram2d(Y, x_edges=[], y_edges=[], bins=[64, 32])
         
+        X = jnp.repeat(X[:, :, None], axis=2)
+        Y = jnp.repeat(Y[:, :, None], num_simulations )
 
-        
 
-        pass    
+        samples_x = X
+        samples_y = Y
+
+        samples = jnp.stack([samples_x, samples_y], axis=1)
+        samples = samples.reshape(batch_size, -1)
+
+        return samples, rng
 
 
 class LotkaVolterraSimulator(SBISimulator):
