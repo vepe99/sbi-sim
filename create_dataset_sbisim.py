@@ -15,7 +15,7 @@ def convert_to_csv(path_stored, path_to_save, num_simulations=1000):
     for file_path in tqdm(all_data_path):
         data = np.load(file_path)
         x.append(data['x'].flatten())
-        theta.append(data['theta'])
+        theta.append(data['theta'][[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
         # Save as CSV with a single row (common for ML observations)
         df_x = pd.DataFrame([x])
         df_x.to_csv(os.path.join(path_to_save, f'x_{num_simulations}.csv'), index=False, header=False)
