@@ -17,8 +17,7 @@ from diffusers.models.unets.unet_2d_blocks_flax import (
     FlaxUNetMidBlock2DCrossAttn,
     FlaxUpBlock2D,
 )
-from flows.cnf import ContinuousNormalizingFlow
-
+from ..cnf import ContinuousNormalizingFlow
 
 @flax_register_to_config
 class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
@@ -69,7 +68,7 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             Whether to split the head dimension into a new axis for the self-attention computation. In most cases,
             enabling this flag should speed up the computation for Stable Diffusion 2.x and Stable Diffusion XL.
     """
-
+    import_samples: int = 5 # or whatever type this should be
     sample_size: int = 32
     dim_flow: int = 3
     in_channels: int = 4
@@ -82,7 +81,8 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     )
     up_block_types: Tuple[str, ...] = ("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D")
     only_cross_attention: Union[bool, Tuple[bool]] = False
-    block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280)
+    # block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280)
+    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64)
     layers_per_block: int = 2
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
@@ -306,14 +306,16 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
 def get_simple_cross_attention_conv2d(
         sample_size: int = 160,
         dim_flow: int = 3,
+        import_samples: int = 5 
 ):
     return Conv2DConditionModel(
+        import_samples = import_samples,
         sample_size=sample_size,
         dim_flow=dim_flow,
         in_channels=1,
         out_channels=1,
         down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D"),
-        block_out_channels=(64, 64, 64, 64, 64, 64),
+        block_out_channels=(64, 32, 64),
         layers_per_block=1,
         attention_head_dim=4,
         num_attention_heads=None,
@@ -331,8 +333,12 @@ def get_simple_cross_attention_conv2d(
     )
 
 class CrossAttentionCNF(ContinuousNormalizingFlow):
-
-    sample_size: int = 160
+    import_samples: int = 5 # or whatever type this should be`
+    dim_conditioning: int = 5  # Move this to the top
+    sample_size: int = 32
+    dim_flow: int = 3
+    in_channels: int = 4
+    out_channels: int = 4
 
     def setup(self):
 

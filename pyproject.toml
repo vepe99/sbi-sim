@@ -43,6 +43,7 @@ dependencies = [
     "astropy",
     "jax[cuda12]",
     "numpy",
+    "nvidia-cublas-cu12>=12.9.0.13", 
 ]
 
 [project.optional-dependencies]

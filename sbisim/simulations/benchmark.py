@@ -94,6 +94,12 @@ class OdisseoSimulator(SBISimulator):
         noise_std = noise_std.to(x.device)
         x_noise = jax.random.multivariate_normal(mean=x, cov=noise_std, key=rng, shape=(x.shape[0]))
         return x_noise
+    
+    def transform_in_histogram(x, bins=[64, 32]):
+        ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] )
+        R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] )
+        vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]] )
+        return jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
 
 
     def __init__(self, ):
@@ -108,9 +114,8 @@ class OdisseoSimulator(SBISimulator):
    
         
     def __call__(self, params,  num_simulations, rng, 
-                 normalize=True, deterministic=False):
-        
-        
+                 normalize=True, deterministic=False, histogram=True):
+            
         if normalize:
             #not sure about this
             params = params * self.std_X + self.mean_X
@@ -129,10 +134,11 @@ class OdisseoSimulator(SBISimulator):
         if normalize:
             # Normalize the streams if required
             Y = (Y - jnp.mean(Y, axis=0)) / jnp.std(Y, axis=0)
-
-        Y, _, _ = jnp.histogram2d(Y, x_edges=[], y_edges=[], bins=[64, 32])
         
-        X = jnp.repeat(X[:, :, None], axis=2)
+        if histogram:
+            Y = self.transform_in_histogram(Y, bins=[64, 32])
+        
+        X = jnp.repeat(X[:, :, None], num_simulations, axis=2)
         Y = jnp.repeat(Y[:, :, None], num_simulations )
 
 

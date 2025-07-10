@@ -3,6 +3,7 @@ from math import ceil
 from pathlib import Path
 from typing import Iterable, Tuple
 
+import jax
 import jax.random as jr
 import jax.numpy as jnp
 
@@ -54,9 +55,15 @@ class GeneratorDataloader(Iterable):
             observation = (observation - self.mean_y) / self.std_y
 
         return observation, true_theta, reference_posterior
+    
+    def transform_in_histogram(self, bins=[64, 32]):
+        ph1_phi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 1], x[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] ),  batch_size=1, xs=self.y)
+        R_vR, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 0], x[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] ),  batch_size=1, xs= self.y)
+        vphicosphi2_vphi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 4], x[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]]), batch_size=1, xs=self.y)
+        self.y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
 
     def __init__(self, dataset: str, DATA_ROOT: str, num_samples: int, split: Tuple[int], seed: jr.PRNGKey,
-                 num_steps: int, batch_size: int, normalize: bool = True, replacement: bool = False):
+                 num_steps: int, batch_size: int, normalize: bool = True, replacement: bool = False, return_histogram: bool = False):
         """
         :param dataset:
         :param DATA_ROOT:
@@ -94,6 +101,11 @@ class GeneratorDataloader(Iterable):
 
         self.y = self.load_file(path.joinpath(f"x_{num_samples}.csv"))
         self.X = self.load_file(path.joinpath(f"theta_{num_samples}.csv"))
+
+        if return_histogram == True:
+            self.y = jnp.reshape(self.y, (-1, 5000, 6))
+            print(f"Transforming {self.dataset} in histogram representation")
+            self.transform_in_histogram()
 
         # samples seem to be sorted when loading from file; make sure to shuffle them!
         permutation_seed = jr.PRNGKey(0)
@@ -263,8 +275,174 @@ class TwoMoons(GeneratorDataloader):
     def __init__(self, *args, **kwargs):
         super().__init__("two_moons", *args, **kwargs)
 
-class Odisseo(GeneratorDataloader):
+# class Odisseo(GeneratorDataloader):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__("odisseo", *args, **kwargs)
+#     def __init__(self, *args, **kwargs,):
+#         super().__init__("odisseo", *args, **kwargs, return_histogram=True)
 
+
+class GeneratorDataloader_numpy(Iterable):
+    num_samples: int
+    rng: jr.PRNGKey
+    num_steps: int
+    batch_size: int
+    X: jnp.ndarray
+    y: jnp.ndarray
+    normalize: bool
+
+    def __iter__(self):
+        self.current_step = 1
+
+        if not self.replacement:
+            perm = jr.permutation(self.rng, self.X.shape[0])
+            self.X = self.X[perm]
+            self.y = self.y[perm]
+            self.rng = jr.split(self.rng)[0]
+
+        return self
+
+    def load_file(self, file):
+
+        return jnp.load(file, allow_pickle=True)
+
+    def get_observation(self, idx):
+
+        base_dir = Path(self.DATA_ROOT).joinpath(self.dataset).joinpath(f'num_observation_{idx}')
+
+        if not base_dir.exists():
+            raise FileNotFoundError(f"Directory {base_dir} does not exist")
+
+        observation = self.load_file(base_dir.joinpath(f"observation.npw"))
+
+        true_theta = self.load_file(base_dir.joinpath(f"true_parameters.npy"))
+
+        reference_posterior = self.load_file(base_dir.joinpath(f"reference_posterior_samples.npy"))
+
+        if self.normalize:
+            true_theta = (true_theta - self.mean_X) / self.std_X
+            reference_posterior = (reference_posterior - self.mean_X) / self.std_X
+            observation = (observation - self.mean_y) / self.std_y
+
+        return observation, true_theta, reference_posterior
+    
+    # def transform_in_histogram(self, bins=[64, 32]):
+    #     ph1_phi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 1], x[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] ),  batch_size=1, xs=self.y)
+    #     R_vR, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 0], x[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] ),  batch_size=1, xs= self.y)
+    #     vphicosphi2_vphi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 4], x[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]]), batch_size=1, xs=self.y)
+    #     self.y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
+
+    def __init__(self, dataset: str, DATA_ROOT: str, num_samples: int, split: Tuple[int], seed: jr.PRNGKey,
+                 num_steps: int, batch_size: int, normalize: bool = True, replacement: bool = False, return_histogram: bool = False):
+        """
+        :param dataset:
+        :param DATA_ROOT:
+        :param num_samples:
+        :param split:
+        :param seed:
+        :param num_steps:
+        :param batch_size:
+        :param normalize:
+        :param replacement:
+        """
+
+
+        path = Path(DATA_ROOT)
+        path = path.joinpath(dataset)
+
+        if num_samples not in [1000, 10000, 100000, 1000000, 10000000]:
+            raise ValueError(f"num_samples ({num_samples}) must be in [1000, 10000, 100000, 1000000]")
+
+        self.replacement = replacement
+
+        self.normalize = normalize
+        self.DATA_ROOT = DATA_ROOT
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.rng = jr.PRNGKey(seed)
+
+        self.current_step = 1
+        self.dim_theta = 10
+
+        split_start = split[0]
+        split_end = split[1]
+
+        self.load_data_from_hf(dataset, Path(DATA_ROOT))
+
+        self.y = self.load_file(path.joinpath(f"x_{num_samples}.npy"))
+        self.X = self.load_file(path.joinpath(f"theta_{num_samples}.npy"))
+
+        # if return_histogram == True:
+        #     self.y = jnp.reshape(self.y, (-1, 5000, 6))
+        #     print(f"Transforming {self.dataset} in histogram representation")
+        #     self.transform_in_histogram()
+
+        # samples seem to be sorted when loading from file; make sure to shuffle them!
+        permutation_seed = jr.PRNGKey(0)
+        perm = jr.permutation(permutation_seed, num_samples)
+        self.X = self.X[perm]
+        self.y = self.y[perm]
+
+        self.mean_X = self.X.mean(axis=0)
+        self.std_X = self.X.std(axis=0)
+
+        self.mean_y = self.y.mean(axis=0)
+        self.std_y = self.y.std(axis=0)
+
+        if self.normalize:
+            self.X = (self.X - self.mean_X) / self.std_X
+            self.y = (self.y - self.mean_y) / self.std_y
+
+        self.X = self.X[split_start:split_end]
+        self.y = self.y[split_start:split_end]
+
+        self.num_samples = self.X.shape[0]
+        if not self.replacement:
+            self.num_steps = int(ceil(self.num_samples / self.batch_size))
+            print(f"Dataloader sampling without replacements (num_steps: {self.num_steps})")
+        else:
+            self.num_steps = num_steps
+
+    def __next__(self):
+        if self.current_step <= self.num_steps:
+
+            if not self.replacement:
+                X = self.X[self.batch_size * (self.current_step-1): self.batch_size * self.current_step]
+                y = self.y[self.batch_size * (self.current_step-1): self.batch_size * self.current_step]
+            else:
+                X = self.X[jr.choice(self.rng, self.num_samples, (self.batch_size,))]
+                y = self.y[jr.choice(self.rng, self.num_samples, (self.batch_size,))]
+                self.rng = jr.split(self.rng)[0]
+
+            self.current_step += 1
+            return {'parameters': X, 'weighting': jnp.ones((self.batch_size, 1)), 'conditioning': y}
+
+        else:
+
+            raise StopIteration
+
+    def __len__(self):
+        return self.num_steps
+    
+    def load_data_from_hf(self, dataset, path):
+
+        path_dir = Path(path).joinpath(dataset)
+        if not path_dir.exists():
+
+            # download folder from huggingface
+            from huggingface_hub import hf_hub_download, snapshot_download
+            print(f"Downloading dataset {dataset} from huggingface...")
+
+            snapshot_download(repo_id=f"thuerey-group/sbi-toy-datasets", 
+                          repo_type="dataset",
+                          local_dir=path,
+                          allow_patterns=[f"{dataset}/*"])
+            
+        else:
+
+            print(f"Loading {dataset} locally from existing directory {path_dir}")
+
+
+class Odisseo(GeneratorDataloader_numpy):
+
+    def __init__(self, *args, **kwargs,):
+        super().__init__("odisseo", *args, **kwargs, )

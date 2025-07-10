@@ -27,6 +27,7 @@ hidden_dims:
 - 128
 - 64
 - 32
+
 data:
   target: sbisim.data.benchmarks.Odisseo
   _file: configs/datasets/benchmarks/10e3_dataset.yaml
@@ -72,48 +73,30 @@ strategy:
         simulator:
           target: sbisim.simulations.OdisseoSimulator
           params:
+            histogram: False
         start_time: ${start_time}
         controlled_flow:
-          target: sbisim.flows.models.fmpe.DenseResidualNet
+          target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
           params:
-            hidden_dims:
-            - 32
-            - 64
-            - 128
-            - 256
-            - 256
-            - 256
-            - 256
-            - 256
-            - 128
-            - 64
-            - 32
-            out_dim: ${dim_flow}
+            sample_size:  32
+            dim_flow: {dim_flow}
+            in_channels:  2
+            out_channels: 10
+            activation_fn: gelu
             in_dim: ${controlled_flow_in_dim}
-            activation_fn: gelu
-            context_dim: ${context_dim}
         aggregation:
-          target: sbisim.flows.models.fmpe.DenseResidualNet
+          target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
           params:
-            hidden_dims:
-            - 32
-            - 64
-            - 128
-            - 256
-            - 256
-            - 256
-            - 256
-            - 256
-            - 128
-            - 64
-            - 32
-            out_dim: ${aggregation_out_dim}
-            in_dim: ${aggregation_in_dim}
+            sample_size:  32
+            dim_flow: {dim_flow}
+            in_channels:  2
+            out_channels: 10
             activation_fn: gelu
+            in_dim: ${controlled_flow_in_dim}
         freeze: true
 
 training:
-  num_epochs: 10
+  num_epochs: 5
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
