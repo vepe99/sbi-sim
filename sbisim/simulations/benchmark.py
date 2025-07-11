@@ -37,21 +37,19 @@ class OdisseoSimulator(SBISimulator):
     code_mass = 1e4 * u.Msun
     code_time = 3 * u.Gyr
     code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-    config = SimulationConfig(N_particles = 5_000,
+    config_sim = SimulationConfig(N_particles = 1_000,
                             return_snapshots = False, 
                             num_timesteps = 1000, 
                             external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
                             acceleration_scheme = DIRECT_ACC_MATRIX,
                             softening = (0.1 * u.pc).to(code_units.code_length).value,) #default values
     #the center of mass needs to be integrated backwards in time first 
-    config_com = config._replace(N_particles=1,)
+    config_com = config_sim._replace(N_particles=1,)
 
     pos_com_final = jnp.array([[11.8, 0.79, 6.4]]) * u.kpc.to(code_units.code_length)
     vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(code_units.code_velocity)
 
-    def run_simulation(self, 
-                       rng_key, 
-                       params):
+    def run_simulation(self, rng_key, params):
         params_samples = SimulationParams(t_end = params[0],
                         Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time)),
                         NFW_params = NFWParams(Mvir=params[2] * u.Msun.to(self.code_units.code_mass),
@@ -76,14 +74,14 @@ class OdisseoSimulator(SBISimulator):
         vel_com = final_state_com[:, 1]
 
         #we construct the initial state of the Plummer sphere
-        positions, velocities, mass = Plummer_sphere(key=rng_key, params=params_samples, config=self.config)
+        positions, velocities, mass = Plummer_sphere(key=rng_key, params=params_samples, config=self.config_sim)
         #we add the center of mass position and velocity to the Plummer sphere particles
         positions = positions + pos_com
         velocities = velocities + vel_com
         #initialize the initial state
         initial_state_stream = construct_initial_state(positions, velocities, )
         #run the simulation
-        final_state = time_integration(initial_state_stream, mass, config=self.config, params=params_samples)
+        final_state = time_integration(initial_state_stream, mass, config=self.config_sim, params=params_samples)
 
         #projection on the GD1 stream
         stream = projection_on_GD1(final_state, code_units=self.code_units,)
@@ -95,7 +93,7 @@ class OdisseoSimulator(SBISimulator):
         x_noise = jax.random.multivariate_normal(mean=x, cov=noise_std, key=rng, shape=(x.shape[0]))
         return x_noise
     
-    def transform_in_histogram(x, bins=[64, 32]):
+    def transform_in_histogram(self, x, bins=[64, 32]):
         ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] )
         R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] )
         vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]] )
@@ -105,27 +103,21 @@ class OdisseoSimulator(SBISimulator):
     def __init__(self, ):
         super().__init__()
 
-        self.code_units = self.code_units
-        self.config = self.config._replace(code_units=self.code_units)
-        self.config_com = self.config_com._replace(code_units=self.code_units)
-        #this is the final position of the cluster, we need to integrate backwards in time 
-        self.pos_com_final = self.pos_com_final
-        self.vel_com_final = self.vel_com_final
-   
         
     def __call__(self, params,  num_simulations, rng, 
                  normalize=True, deterministic=False, histogram=True):
             
-        if normalize:
-            #not sure about this
-            params = params * self.std_X + self.mean_X
+        # if normalize:
+        #     #not sure about this
+        #     params = params * self.std_X + self.mean_X
 
         batch_size = params.shape[0]
 
-        X = jnp.repeat(params, batch_size)
+        # X = jnp.repeat(params, batch_size)
+        X = params
         Y = self.run_simulation(rng, params)
-        Y = jnp.repeat(Y, batch_size)
-
+        # Y = jnp.repeat(Y, batch_size)
+        print(f"Y shape: {Y.shape}, X shape: {X.shape}, num_simulations: {num_simulations}")
         if deterministic:
             pass
         else:
@@ -135,19 +127,24 @@ class OdisseoSimulator(SBISimulator):
             # Normalize the streams if required
             Y = (Y - jnp.mean(Y, axis=0)) / jnp.std(Y, axis=0)
         
+        bins = [64, 32]
         if histogram:
-            Y = self.transform_in_histogram(Y, bins=[64, 32])
+            ph1_phi2, _, _ = jnp.histogram2d(Y[:, 1], Y[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] )
+            R_vR, _, _ = jnp.histogram2d(Y[:, 0], Y[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] )
+            vphicosphi2_vphi2, _, _ = jnp.histogram2d(Y[:, 4], Y[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]] )
+            Y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
         
-        X = jnp.repeat(X[:, :, None], num_simulations, axis=2)
-        Y = jnp.repeat(Y[:, :, None], num_simulations )
+        X = jnp.repeat(X[:, None], num_simulations, axis=1)
+        Y = jnp.repeat(Y[:, None], num_simulations, axis=1 )
 
 
         samples_x = X
         samples_y = Y
 
-        samples = jnp.stack([samples_x, samples_y], axis=1)
-        samples = samples.reshape(batch_size, -1)
-
+        # samples = jnp.stack([samples_x, samples_y.reshape(samples_x.shape)], axis=1)
+        # samples = samples.reshape(batch_size, -1)
+        # samples = samples_y.reshape(batch_size, -1)
+        samples = samples_y
         return samples, rng
 
 

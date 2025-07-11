@@ -239,7 +239,9 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             timesteps: Union[jnp.ndarray, float, int],
             sample: jnp.ndarray,
             encoder_hidden_states: jnp.ndarray,
+            loss_grad = None,
             train: bool = False,
+            context =  None
     ) -> jnp.ndarray:
         r"""
         Args:
@@ -298,6 +300,10 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         sample = jnp.transpose(sample, (0, 3, 1, 2))
 
         sample = jnp.reshape(sample, (sample.shape[0], -1))
+
+        if loss_grad is not None:
+            sample = nn.glu(jnp.concatenate(
+                [sample, loss_grad], axis=1), axis=1)
 
         out = self.dense_out(sample)
 

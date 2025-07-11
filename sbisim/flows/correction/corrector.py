@@ -206,6 +206,7 @@ class CorrectorDifferentiableSimulatorLV(nn.Module):
     def l2_distance(self, theta_1, target):
 
         simulator_rng = self.make_rng('simulator')
+        # jax.debug.print("{theta_1_shape}", theta_1.shape)
         output, _ = self.simulator_impl(theta_1[None], num_simulations=self.num_simulations,
                                         rng=simulator_rng, deterministic=True)  # noqa
 
@@ -279,15 +280,17 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
     def mmd(self, theta_1, target):
 
         simulator_rng = self.make_rng('simulator')
-        output, _ = self.simulator_impl(theta_1[None], num_simulations=self.num_simulations,
-                                        rng=simulator_rng, deterministic=True)  # noqa
+        print(f"theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, histogram=True)  # noqa
 
-        output = output[0]
+        # output = output[0]
 
-        output = output * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
-        target = target * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
+        # output = output * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
+        # target = target * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
         
-        return percintile_based_mmd(output, target) 
+        # return percintile_based_mmd(output, target) 
+        return ((output - target)**2).mean()
         
 
     def forward_flow(self, t, theta, context, train=False):
@@ -314,7 +317,8 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
         output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
 
         output = jnp.concatenate([flow_pred, t, output], axis=1)
-        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        # drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  # noqa
 
         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
