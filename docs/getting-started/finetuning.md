@@ -13,7 +13,7 @@ The weights of the trained models are stored at `./logs/LotkaVolterraFM`
 Finetune the pretrained flow with the control network
 
 ``
-python main.py --config=configs/experiments/control_signal/lv_differentiable_control.yaml --name=LotkaVolterraSimulator weight_file_pretrained=$PATH_TO_PRETRAINED_WEIGHTS
+python main.py --config=configs/experiments/control_signal/lv_differentiable_control.yaml --name=LotkaVolterraSimulator weight_file_pretrained=$PATH_TO_PRETRAINED_WEIGHTS --dryrun
 ``
 
 Make sure that `$PATH_TO_PRETRAINED_WEIGHTS` is absolute.

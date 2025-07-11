@@ -1,5 +1,5 @@
 from dataclasses import field
-from typing import List, Tuple, Union, Sequence
+from typing import List, Tuple, Optional, Any, Sequence, Union
 
 from jax import Array, dtypes, random
 from jax._src.nn.initializers import RealNumeric, DTypeLikeInexact, Initializer, _compute_fans, lecun_uniform
@@ -412,3 +412,225 @@ class BenchmarkFMPE(ContinuousNormalizingFlow):
             num_blocks=self.num_blocks,
             out_dim=self.out_dim
         )
+
+
+
+# --- Helper Modules ---
+
+class FlaxTimesteps(nn.Module):
+    """
+    A Flax module for creating sinusoidal timestep embeddings.
+    This is a standard component in diffusion and flow-matching models.
+    
+    Attributes:
+        num_channels: The number of channels in the output embedding.
+        flip_sin_to_cos: Whether to flip the order of sin and cos in the embedding.
+        downscale_freq_shift: A frequency shift parameter.
+    """
+    num_channels: int
+    flip_sin_to_cos: bool = True
+    downscale_freq_shift: float = 0.0
+
+    @nn.compact
+    def __call__(self, timesteps: Array) -> Array:
+        """
+        Args:
+            timesteps: A 1D array of timesteps.
+        Returns:
+            An array of shape (timesteps.shape[0], num_channels)
+        """
+        half_dim = self.num_channels // 2
+        exponent = -jnp.log(10000.0) * jnp.arange(start=0, stop=half_dim, dtype=jnp.float32)
+        exponent = exponent / (half_dim - self.downscale_freq_shift)
+        
+        emb = jnp.exp(exponent)
+        emb = timesteps[:, None] * emb[None, :]
+        
+        if self.flip_sin_to_cos:
+            emb = jnp.concatenate([jnp.cos(emb), jnp.sin(emb)], axis=-1)
+        else:
+            emb = jnp.concatenate([jnp.sin(emb), jnp.cos(emb)], axis=-1)
+        return emb
+
+
+class Downsample(nn.Module):
+    """A downsampling block using a strided convolution."""
+    features: int
+    @nn.compact
+    def __call__(self, x: Array) -> Array:
+        return nn.Conv(self.features, kernel_size=(4, 4), strides=(2, 2), padding='SAME')(x)
+
+class Upsample(nn.Module):
+    """An upsampling block using a transposed convolution."""
+    features: int
+    @nn.compact
+    def __call__(self, x: Array) -> Array:
+        return nn.ConvTranspose(self.features, kernel_size=(4, 4), strides=(2, 2), padding='SAME')(x)
+
+class ConvResidualBlock(nn.Module):
+    """
+    A convolutional residual block with conditioning.
+
+    Attributes:
+        features: The number of output channels.
+        activation_fn: The activation function to use.
+        norm_groups: The number of groups for Group Normalization.
+    """
+    features: int
+    activation_fn: Any = nn.silu
+    norm_groups: int = 8
+    
+    @nn.compact
+    def __call__(self, x: Array, cond_emb: Array, train: bool = True) -> Array:
+        """
+        Args:
+            x: Input feature map of shape (B, H, W, C).
+            cond_emb: Conditioning embedding of shape (B, D).
+            train: A boolean flag (not used in this block but good practice).
+        
+        Returns:
+            Output feature map of shape (B, H, W, features).
+        """
+        h = nn.GroupNorm(num_groups=self.norm_groups)(x)
+        h = self.activation_fn(h)
+        h = nn.Conv(self.features, kernel_size=(3, 3), padding='SAME')(h)
+
+        # Project conditioning embedding and add to the feature map
+        cond_proj = nn.Dense(self.features)(self.activation_fn(cond_emb))
+        h = h + cond_proj[:, None, None, :] # Broadcast to spatial dimensions
+
+        h = nn.GroupNorm(num_groups=self.norm_groups)(h)
+        h = self.activation_fn(h)
+        h = nn.Conv(self.features, kernel_size=(3, 3), padding='SAME')(h)
+
+        # Residual connection
+        if x.shape[-1] != self.features:
+            x_proj = nn.Conv(self.features, kernel_size=(1, 1))(x)
+            return x_proj + h
+        return x + h
+
+# --- Main Embedding Network ---
+
+class ConvolutionalEmbeddingNet(nn.Module):
+    """
+    A U-Net based Convolutional Embedding Network for Flow Matching.
+
+    This network takes simulation data `x`, parameters `theta`, and a time `t` as
+    input, and outputs a vector field of the same spatial dimensions as `x`.
+    
+    Attributes:
+        out_channels: Number of channels in the output.
+        start_channels: Number of channels in the first convolutional layer.
+        dim_mults: A tuple of channel multipliers for each U-Net level.
+        num_residual_blocks: Number of residual blocks per level.
+        time_emb_dim: The dimension for the time embedding.
+        theta_emb_dim: The dimension for the parameter embedding. Set to 0 to disable.
+        activation_fn: The activation function for the network.
+        norm_groups: The number of groups for Group Normalization.
+    """
+    out_channels: int
+    start_channels: int = 64
+    dim_mults: Tuple[int, ...] = (1, 2, 4)
+    num_residual_blocks: int = 2
+    time_emb_dim: int = 32
+    theta_emb_dim: int = 32
+    activation_fn: Any = nn.silu
+    norm_groups: int = 8
+
+    @nn.compact
+    def __call__(self, t: Array, theta: Array, x: Array, train: bool = True) -> Array:
+        """
+        The forward pass of the network.
+
+        Args:
+            t: A batch of time values, shape (B,).
+            theta: A batch of simulation parameters, shape (B, param_dim).
+            x: A batch of simulation data, shape (B, H, W, C).
+            train: A boolean indicating if the model is in training mode.
+        
+        Returns:
+            The output vector field from the network, shape (B, H, W, out_channels).
+        """
+        # --- 1. Input Handling & Conditioning Embeddings ---
+        if not isinstance(t, jnp.ndarray) or t.ndim == 0:
+            t = jnp.atleast_1d(t).astype(x.dtype)
+
+        # Time embedding
+        time_emb_module = FlaxTimesteps(num_channels=self.time_emb_dim)
+        t_emb = time_emb_module(t)
+        
+        time_mlp_dim = self.time_emb_dim * 4
+        t_emb = nn.Sequential([
+            nn.Dense(time_mlp_dim),
+            self.activation_fn,
+            nn.Dense(time_mlp_dim),
+        ], name="time_mlp")(t_emb)
+        
+        # Combine time and theta embeddings
+        cond_emb = t_emb
+        if self.theta_emb_dim > 0 and theta is not None:
+            theta_mlp_dim = self.theta_emb_dim * 4
+            theta_emb = nn.Sequential([
+                nn.Dense(theta_mlp_dim),
+                self.activation_fn,
+                nn.Dense(time_mlp_dim) # Project to same dim as time_mlp output
+            ], name="theta_mlp")(theta)
+            cond_emb += theta_emb
+
+        # --- 2. U-Net Architecture ---
+        
+        # -- Initial Convolution --
+        h = nn.Conv(self.start_channels, kernel_size=(3, 3), padding="SAME")(x)
+        skips = [h]
+
+        # -- Downsampling Path --
+        current_ch = self.start_channels
+        for i, mult in enumerate(self.dim_mults):
+            out_ch = self.start_channels * mult
+            for _ in range(self.num_residual_blocks):
+                h = ConvResidualBlock(
+                    features=out_ch,
+                    activation_fn=self.activation_fn,
+                    norm_groups=self.norm_groups,
+                )(h, cond_emb, train=train)
+                skips.append(h)
+            
+            is_last = (i == len(self.dim_mults) - 1)
+            if not is_last:
+                h = Downsample(features=out_ch)(h)
+                skips.append(h)
+            current_ch = out_ch
+
+        # -- Bottleneck --
+        h = ConvResidualBlock(current_ch, activation_fn=self.activation_fn, norm_groups=self.norm_groups)(h, cond_emb, train)
+        h = ConvResidualBlock(current_ch, activation_fn=self.activation_fn, norm_groups=self.norm_groups)(h, cond_emb, train)
+
+        # -- Upsampling Path --
+        for i, mult in enumerate(reversed(self.dim_mults)):
+            out_ch = self.start_channels * mult
+            is_last = (i == len(self.dim_mults) - 1)
+            if not is_last:
+                h = jnp.concatenate([h, skips.pop()], axis=-1)
+                h = Upsample(features=out_ch)(h)
+                
+            for _ in range(self.num_residual_blocks + 1):
+                h = jnp.concatenate([h, skips.pop()], axis=-1)
+                h = ConvResidualBlock(
+                    features=out_ch,
+                    activation_fn=self.activation_fn,
+                    norm_groups=self.norm_groups,
+                )(h, cond_emb, train=train)
+
+        # -- Final Projection --
+        final_conv = nn.Sequential([
+            nn.GroupNorm(num_groups=self.norm_groups),
+            self.activation_fn,
+            nn.Conv(
+                features=self.out_channels,
+                kernel_size=(3, 3),
+                padding="SAME",
+                kernel_init=nn.initializers.zeros,
+            ),
+        ])
+        
+        return final_conv(h)

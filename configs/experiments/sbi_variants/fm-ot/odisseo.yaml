@@ -4,7 +4,7 @@ dim_flow: 4
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 1
+batch_size: 256
 
 weighting: 'one'
 loss_type: 'fm_ot'
@@ -56,19 +56,23 @@ strategy:
         sample_size:  32
         in_channels:  3
         out_channels: 10
+      # target: sbisim.flows.models.fmpe.ConvolutionalEmbeddingNet
+      # params:
+      #   out_channels: 10
+
 
 training:
-  num_epochs: 200
+  num_epochs: 10
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
     patience: 50
 
-test:
-  active: True
-  tests:
-    c2st:
-      target: sbisim.callbacks.C2ST
+# test:
+#   active: True
+#   tests:
+#     c2st:
+#       target: sbisim.callbacks.C2ST
 
 patience: 3
 optimization:
@@ -80,8 +84,8 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  scatter:
-    target: sbisim.callbacks.BenchmarkScatterPlot
-    params:
-      save_every: 50
-      savedir: ${runtime.logdir}
+  # scatter:
+  #   target: sbisim.callbacks.BenchmarkScatterPlot
+  #   params:
+  #     save_every: 50
+  #     savedir: ${runtime.logdir}

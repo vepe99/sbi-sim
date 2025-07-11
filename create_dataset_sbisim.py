@@ -34,8 +34,8 @@ from tqdm import tqdm
 #     print(f'done converting all the npz files to csv in the folder {path_to_save}')
 
 def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
-    print('start converting all the npz files to a single npz file')
-    all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[:num_simulations] if f.endswith('.npz')]
+    print('start converting all the npz files to a single npy file')
+    all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[:num_simulations] if f.endswith('.npz') and 'file' in f]
     x = []
     theta = []
     observation = []
@@ -58,9 +58,32 @@ def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
     
     print(f'done converting all the npz files to a single npz file in the folder {path_to_save}')
 
+def num_observation_npy(path_stored, path_to_save, simulation_observation_index=[1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]):
+    print('start converting num_observation files to npy')
+    all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[1000:1010] if f.endswith('.npz') and 'file' in f]
+    x = []
+    theta = []
+
+    i=1
+    for file_path in tqdm(all_data_path):
+        path_to_save_num_observation = os.path.join(path_to_save, f'num_observation_{i}')
+        if not os.path.exists(path_to_save_num_observation):
+            os.makedirs(path_to_save_num_observation)
+        data = np.load(file_path)
+        x.append(data['x']) #histogram
+        theta.append(data['theta'][[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
+
+        np.save(os.path.join(path_to_save_num_observation, f'observation.npy'), x)
+        np.save(os.path.join(path_to_save_num_observation, f'true_parameters.npy'), theta)
+        i += 1
+    print(f'done converting all the num_observation files in the folder {path_to_save}')
+
+
 if __name__ == "__main__":
-    path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/'
+    path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/'
     path_to_save = './data/sbi-benchmarks/odisseo/'
     # convert_to_csv(path_stored, path_to_save, num_simulations=1000)
-    convert_to_single_npy(path_stored, path_to_save, num_simulations=1000)
+    # convert_to_single_npy(path_stored, path_to_save, num_simulations=1_000)
+    num_observation_npy(path_stored, path_to_save, simulation_observation_index=range(1000, 1010))
+
 

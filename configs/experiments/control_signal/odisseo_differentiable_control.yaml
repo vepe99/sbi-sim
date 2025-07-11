@@ -1,8 +1,8 @@
 name: Odisseo_0_gradient_signal
 dim_flow: 4
 sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x32 
-dim_conditioning: 10
-dim_network: 25
+dim_conditioning: 5
+dim_network: 4
 context_dim: 16
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
@@ -61,11 +61,11 @@ strategy:
     model_pretrained:
       target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
       params:
-        sample_size:  32
-        dim_flow: {dim_flow}
-        in_channels:  2
+        import_samples: 5 
+        dim_flow: ${dim_flow}
+        sample_size:  64
+        in_channels:  3
         out_channels: 10
-        activation_fn: gelu
     weight_file_pretrained: ${weight_file_pretrained}
     model:
       target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseo
@@ -78,21 +78,19 @@ strategy:
         controlled_flow:
           target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
           params:
+            import_samples: 5 
+            dim_flow: ${dim_flow}
             sample_size:  32
-            dim_flow: {dim_flow}
-            in_channels:  2
+            in_channels:  3
             out_channels: 10
-            activation_fn: gelu
-            in_dim: ${controlled_flow_in_dim}
         aggregation:
           target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
           params:
+            import_samples: 5 
+            dim_flow: ${dim_flow}
             sample_size:  32
-            dim_flow: {dim_flow}
-            in_channels:  2
+            in_channels:  3
             out_channels: 10
-            activation_fn: gelu
-            in_dim: ${controlled_flow_in_dim}
         freeze: true
 
 training:
@@ -102,11 +100,11 @@ training:
   early_stopping:
     patience: 50
 
-test:
-  active: True
-  tests:
-    c2st:
-      target: sbisim.callbacks.C2ST
+# test:
+#   active: True
+#   tests:
+#     c2st:
+#       target: sbisim.callbacks.C2ST
 
 patience: 6
 optimization:
@@ -118,8 +116,8 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  scatter:
-    target: sbisim.callbacks.BenchmarkScatterPlot
-    params:
-      save_every: 25
-      savedir: ${runtime.logdir}
+  # scatter:
+  #   target: sbisim.callbacks.BenchmarkScatterPlot
+  #   params:
+  #     save_every: 25
+  #     savedir: ${runtime.logdir}

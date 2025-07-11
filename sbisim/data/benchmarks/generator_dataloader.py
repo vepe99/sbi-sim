@@ -312,7 +312,7 @@ class GeneratorDataloader_numpy(Iterable):
         if not base_dir.exists():
             raise FileNotFoundError(f"Directory {base_dir} does not exist")
 
-        observation = self.load_file(base_dir.joinpath(f"observation.npw"))
+        observation = self.load_file(base_dir.joinpath(f"observation.npy"))
 
         true_theta = self.load_file(base_dir.joinpath(f"true_parameters.npy"))
 
