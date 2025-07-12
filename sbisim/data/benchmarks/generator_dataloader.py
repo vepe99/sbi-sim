@@ -56,14 +56,8 @@ class GeneratorDataloader(Iterable):
 
         return observation, true_theta, reference_posterior
     
-    def transform_in_histogram(self, bins=[64, 32]):
-        ph1_phi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 1], x[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] ),  batch_size=1, xs=self.y)
-        R_vR, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 0], x[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] ),  batch_size=1, xs= self.y)
-        vphicosphi2_vphi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 4], x[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]]), batch_size=1, xs=self.y)
-        self.y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
-
     def __init__(self, dataset: str, DATA_ROOT: str, num_samples: int, split: Tuple[int], seed: jr.PRNGKey,
-                 num_steps: int, batch_size: int, normalize: bool = True, replacement: bool = False, return_histogram: bool = False):
+                 num_steps: int, batch_size: int, normalize: bool = True, replacement: bool = False,):
         """
         :param dataset:
         :param DATA_ROOT:
@@ -102,10 +96,6 @@ class GeneratorDataloader(Iterable):
         self.y = self.load_file(path.joinpath(f"x_{num_samples}.csv"))
         self.X = self.load_file(path.joinpath(f"theta_{num_samples}.csv"))
 
-        if return_histogram == True:
-            self.y = jnp.reshape(self.y, (-1, 5000, 6))
-            print(f"Transforming {self.dataset} in histogram representation")
-            self.transform_in_histogram()
 
         # samples seem to be sorted when loading from file; make sure to shuffle them!
         permutation_seed = jr.PRNGKey(0)
@@ -120,6 +110,7 @@ class GeneratorDataloader(Iterable):
         self.std_y = self.y.std(axis=0)
 
         if self.normalize:
+            print(f"Normalizing {self.dataset} data")
             self.X = (self.X - self.mean_X) / self.std_X
             self.y = (self.y - self.mean_y) / self.std_y
 
@@ -389,8 +380,10 @@ class GeneratorDataloader_numpy(Iterable):
         self.std_y = self.y.std(axis=0)
 
         if self.normalize:
+            print(f"Normalizing {self.dataset} data")
             self.X = (self.X - self.mean_X) / self.std_X
-            self.y = (self.y - self.mean_y) / self.std_y
+            print(f'Normalization of theta, mean X: {self.mean_X}, std X: {self.std_X}')
+            # self.y = (self.y - self.mean_y) / self.std_y #this normalization is not needed for the histogram representation
 
         self.X = self.X[split_start:split_end]
         self.y = self.y[split_start:split_end]

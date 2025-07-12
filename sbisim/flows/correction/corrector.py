@@ -308,6 +308,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
 
         theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
 
+        print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
         grad_fn = vmap(value_and_grad(self.mmd), in_axes=0)
         loss, grad = grad_fn(theta_1, context)
 

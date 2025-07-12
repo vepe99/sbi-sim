@@ -33,6 +33,9 @@ class SBISimulator:
 
 class OdisseoSimulator(SBISimulator):
 
+    mean_X = jnp.array([ 2.74624777,  4.11436082, 11.64272994, 10.83071852])
+    std_X = jnp.array([1.293599, 0.33540717, 0.23241504, 0.23697831])
+
     code_length = 10.0 * u.kpc
     code_mass = 1e4 * u.Msun
     code_time = 3 * u.Gyr
@@ -105,11 +108,12 @@ class OdisseoSimulator(SBISimulator):
 
         
     def __call__(self, params,  num_simulations, rng, 
-                 normalize=True, deterministic=False, histogram=True):
+                 normalize=True, deterministic=False, ):
             
-        # if normalize:
-        #     #not sure about this
-        #     params = params * self.std_X + self.mean_X
+        if normalize:
+            print(f'De-Normalizing in the simulator')
+            #not sure about this
+            params = params * self.std_X + self.mean_X
 
         batch_size = params.shape[0]
 
@@ -123,9 +127,9 @@ class OdisseoSimulator(SBISimulator):
         else:
             Y =  self.add_noise(x=Y, rng=rng)
 
-        if normalize:
-            # Normalize the streams if required
-            Y = (Y - jnp.mean(Y, axis=0)) / jnp.std(Y, axis=0)
+        # if normalize:
+        #     # Normalize the streams if required
+        #     Y = (Y - jnp.mean(Y, axis=0)) / jnp.std(Y, axis=0)
         
         # bins = [64, 32]
         # if histogram:
