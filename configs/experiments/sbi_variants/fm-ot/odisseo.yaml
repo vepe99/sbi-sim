@@ -14,7 +14,7 @@ learning_rate: 0.001
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e3_dataset.yaml
+  _file: configs/datasets/benchmarks/10e4_dataset.yaml
 
 strategy:
   target: sbisim.strategy.ConditionalFlowMatching
@@ -62,7 +62,7 @@ strategy:
 
 
 training:
-  num_epochs: 10
+  num_epochs: 200
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:

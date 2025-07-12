@@ -280,7 +280,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
     def mmd(self, theta_1, target):
 
         simulator_rng = self.make_rng('simulator')
-        print(f"theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
         output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
                                         rng=simulator_rng, deterministic=True, histogram=True)  # noqa
 
@@ -288,7 +288,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
 
         # output = output * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
         # target = target * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
-        print(f"output shape: {output.shape}, target shape: {target.shape}")
+        print(f" In the corrector: output shape: {output.shape}, target shape: {target.shape}")
         
         return percintile_based_mmd(output, target) 
         
@@ -318,7 +318,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
 
         output = jnp.concatenate([flow_pred, t, output], axis=1)
         # drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
-        drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  # noqa
+        drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention 
 
         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))

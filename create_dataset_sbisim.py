@@ -66,9 +66,9 @@ def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
     
     print(f'done converting all the npz files to a single npz file in the folder {path_to_save}')
 
-def num_observation_npy(path_stored, path_to_save, simulation_observation_index=[1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]):
+def num_observation_npy(path_stored, path_to_save, simulation_observation_index=1_000):
     print('start converting num_observation files to npy')
-    all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[1000:1010] if f.endswith('.npz') and 'file' in f]
+    all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[simulation_observation_index:simulation_observation_index+10] if f.endswith('.npz') and 'file' in f]
     x = []
     theta = []
     i=1
@@ -92,8 +92,8 @@ if __name__ == "__main__":
     path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/'
     path_to_save = './data/sbi-benchmarks/odisseo/'
     # convert_to_csv(path_stored, path_to_save, num_simulations=1000)
-    convert_to_single_npy(path_stored, path_to_save, num_simulations=1_000)
-    num_observation_npy(path_stored, path_to_save, simulation_observation_index=range(1000, 1010))
+    convert_to_single_npy(path_stored, path_to_save, num_simulations=10_000)
+    num_observation_npy(path_stored, path_to_save, simulation_observation_index=10_000)
 
 
 

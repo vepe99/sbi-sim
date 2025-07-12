@@ -330,7 +330,8 @@ def get_simple_cross_attention_conv2d(
         in_channels=1,
         out_channels=1,
         down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D"),
-        block_out_channels=(64, 32, 64),
+        # block_out_channels=(64, 32, 64),
+        block_out_channels=(320, 640, 1280, 1280),
         layers_per_block=1,
         attention_head_dim=4,
         num_attention_heads=None,
@@ -353,7 +354,7 @@ class CrossAttentionCNF(ContinuousNormalizingFlow):
     sample_size: int = 32
     dim_flow: int = 3
     in_channels: int = 4
-    out_channels: int = 4
+    out_channels: int = 10
 
     def setup(self):
 

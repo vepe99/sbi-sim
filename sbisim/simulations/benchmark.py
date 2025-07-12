@@ -117,7 +117,7 @@ class OdisseoSimulator(SBISimulator):
         X = params
         Y = self.run_simulation(rng, params)
         # Y = jnp.repeat(Y, batch_size)
-        print(f"Y shape: {Y.shape}, X shape: {X.shape}, num_simulations: {num_simulations}")
+        print(f"In teh simulator: Y shape: {Y.shape}, X shape: {X.shape}, num_simulations: {num_simulations}")
         if deterministic:
             pass
         else:
