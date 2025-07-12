@@ -4,7 +4,7 @@ dim_flow: 4
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 256
+batch_size: 1024
 
 weighting: 'one'
 loss_type: 'fm_ot'
@@ -29,17 +29,11 @@ strategy:
     bandwidth: 0.01
     prior:
       target: sbisim.strategy.distributions.get_odisseo_prior
-      params:
-        shape:
-         - ${dim_flow}
     sampler:
       target: sbisim.strategy.improved_inference.PriorODESolver
       params:
         prior:
           target: sbisim.strategy.distributions.get_odisseo_prior
-          params:
-            shape:
-             - ${dim_flow}
         solver_name: euler
         init_stepsize: 0.01
     schedule:

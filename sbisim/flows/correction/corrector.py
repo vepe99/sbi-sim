@@ -282,7 +282,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
         simulator_rng = self.make_rng('simulator')
         print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
         output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
-                                        rng=simulator_rng, deterministic=True, histogram=True)  # noqa
+                                        rng=simulator_rng, deterministic=True, )  # noqa
 
         # output = output[0]
 
