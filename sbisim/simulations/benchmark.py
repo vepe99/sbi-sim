@@ -127,15 +127,15 @@ class OdisseoSimulator(SBISimulator):
             # Normalize the streams if required
             Y = (Y - jnp.mean(Y, axis=0)) / jnp.std(Y, axis=0)
         
-        bins = [64, 32]
-        if histogram:
-            ph1_phi2, _, _ = jnp.histogram2d(Y[:, 1], Y[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] )
-            R_vR, _, _ = jnp.histogram2d(Y[:, 0], Y[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] )
-            vphicosphi2_vphi2, _, _ = jnp.histogram2d(Y[:, 4], Y[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]] )
-            Y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
+        # bins = [64, 32]
+        # if histogram:
+        #     ph1_phi2, _, _ = jnp.histogram2d(Y[:, 1], Y[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] )
+        #     R_vR, _, _ = jnp.histogram2d(Y[:, 0], Y[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] )
+        #     vphicosphi2_vphi2, _, _ = jnp.histogram2d(Y[:, 4], Y[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]] )
+        #     Y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
         
-        X = jnp.repeat(X[:, None], num_simulations, axis=1)
-        Y = jnp.repeat(Y[:, None], num_simulations, axis=1 )
+        # X = jnp.repeat(X[:, None], num_simulations, axis=1)
+        # Y = jnp.repeat(Y[:, None], num_simulations, axis=1 )
 
 
         samples_x = X

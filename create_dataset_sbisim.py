@@ -46,7 +46,7 @@ def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
     
     for file_path in tqdm(all_data_path):
         data = np.load(file_path)
-        x.append(data['x']) #histogram
+        x.append(data['x'][:1000]) #histogram
         theta.append(data['theta'][[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
         observation.append(data['x'])
         true_theta.append(data['theta'])
@@ -77,7 +77,7 @@ def num_observation_npy(path_stored, path_to_save, simulation_observation_index=
         if not os.path.exists(path_to_save_num_observation):
             os.makedirs(path_to_save_num_observation)
         data = np.load(file_path)
-        x.append(data['x']) #histogram
+        x.append(data['x'][:1000]) #histogram
         theta.append(data['theta'][[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
 
         np.save(os.path.join(path_to_save_num_observation, f'observation.npy'), x)
@@ -87,32 +87,13 @@ def num_observation_npy(path_stored, path_to_save, simulation_observation_index=
     print('theta shape:', np.array(theta).shape)
     print(f'done converting all the num_observation files in the folder {path_to_save}')
 
-def histogram_set(x):
-    ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins=bins, range=[[-120., 70.], [-8, 2]])
-    R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins=bins, range=[[6., 20.], [-250., 250.]])
-    vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins=bins, range=[[-2., 1.], [-0.1, 0.1]])
-    return jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
-
 
 if __name__ == "__main__":
     path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/'
     path_to_save = './data/sbi-benchmarks/odisseo/'
     # convert_to_csv(path_stored, path_to_save, num_simulations=1000)
-    # convert_to_single_npy(path_stored, path_to_save, num_simulations=1_000)
-    # num_observation_npy(path_stored, path_to_save, simulation_observation_index=range(1000, 1010))
+    convert_to_single_npy(path_stored, path_to_save, num_simulations=1_000)
+    num_observation_npy(path_stored, path_to_save, simulation_observation_index=range(1000, 1010))
 
-    bins = (64, 32)
-
-
-    # Vectorize over batch dimension using vmap
-    batched_histogram = jax.vmap(histogram_set, in_axes=0)
-
-    # Example usage
-    key = jax.random.PRNGKey(0)
-    batch_size = 256
-    data = jax.random.normal(key, (batch_size, 5000, 6))
-
-    result = batched_histogram(data)  # shape: (batch_size, 3, 64, 32)
-    print(result.shape)
 
 

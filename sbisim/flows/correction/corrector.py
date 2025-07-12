@@ -288,9 +288,9 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
 
         # output = output * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
         # target = target * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
+        print(f"output shape: {output.shape}, target shape: {target.shape}")
         
-        # return percintile_based_mmd(output, target) 
-        return ((output - target)**2).mean()
+        return percintile_based_mmd(output, target) 
         
 
     def forward_flow(self, t, theta, context, train=False):
