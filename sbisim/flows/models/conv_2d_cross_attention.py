@@ -239,8 +239,14 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins=bins, range=[[-120., 70.], [-8, 2]])
         R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins=bins, range=[[6., 20.], [-250., 250.]])
         vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins=bins, range=[[-2., 1.], [-0.1, 0.1]])
-        return jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
-
+        histograms = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
+    
+        # Normalize each histogram to sum to 1 (convert to probability distribution)
+        total = jnp.sum(histograms, axis=(1, 2), keepdims=True)
+        normalized_histograms = histograms / (total + 1e-8)  # Add epsilon to avoid division by zero
+        
+        return normalized_histograms
+    
     def __call__(
             self,
             timesteps: Union[jnp.ndarray, float, int],
@@ -271,6 +277,7 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         print("compiling.....")
         # print(encoder_hidden_states.shape)
         encoder_hidden_states = jax.vmap(self.histogram_set, in_axes=0)(encoder_hidden_states)
+
 
         timesteps = jnp.reshape(timesteps, -1)
 
