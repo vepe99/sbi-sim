@@ -15,6 +15,7 @@ learning_rate: 0.001
 data:
   target: sbisim.data.benchmarks.Odisseo
   _file: configs/datasets/benchmarks/10e4_dataset.yaml
+  normalization : True
 
 strategy:
   target: sbisim.strategy.ConditionalFlowMatching
@@ -27,7 +28,7 @@ strategy:
     time_alpha: 1
     bandwidth: 0.01
     prior:
-      target: sbisim.strategy.distributions.get_normal_gaussian_prior
+      target: sbisim.strategy.distributions.get_odisseo_prior
       params:
         shape:
          - ${dim_flow}
@@ -35,7 +36,7 @@ strategy:
       target: sbisim.strategy.improved_inference.PriorODESolver
       params:
         prior:
-          target: sbisim.strategy.distributions.get_normal_gaussian_prior
+          target: sbisim.strategy.distributions.get_odisseo_prior
           params:
             shape:
              - ${dim_flow}
@@ -62,7 +63,7 @@ strategy:
 
 
 training:
-  num_epochs: 200
+  num_epochs: 5
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:

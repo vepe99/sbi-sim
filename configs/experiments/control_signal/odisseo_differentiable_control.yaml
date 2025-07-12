@@ -42,7 +42,7 @@ strategy:
     start_time: ${start_time}
     time_alpha: 0.0
     prior:
-      target: sbisim.strategy.distributions.get_normal_gaussian_prior
+      target: sbisim.strategy.distributions.get_odisseo_prior
       params:
         shape:
         - 4

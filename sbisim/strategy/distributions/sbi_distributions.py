@@ -1,6 +1,10 @@
 from .base_distribution import UniformBase, LogNormalBase, GaussianBase
+from odisseo.option_classes import SimulationParams, MNParams, NFWParams, PlummerParams, PSPParams
+from odisseo.units import CodeUnits
+from astropy import units as u
 
 import jax.numpy as jnp
+from math import log10
 
 def get_two_moons_prior():
     return UniformBase(
@@ -34,5 +38,36 @@ def get_lotka_volterra_prior():
     return LogNormalBase(
         mean=jnp.array([-0.125, -3, -0.125, -3]),
         std=jnp.array([0.5, 0.5, 0.5, 0.5]),
+        shape=(4,)
+    )
+
+def get_odisseo_prior():
+
+    code_length = 10.0 * u.kpc
+    code_mass = 1e4 * u.Msun
+    code_time = 3 * u.Gyr
+    code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+
+    params = SimulationParams(t_end = (3 * u.Gyr).to(code_units.code_time).value,  
+                            Plummer_params= PlummerParams(Mtot=(10**4.05 * u.Msun).to(code_units.code_mass).value,
+                                                            a=(8 * u.pc).to(code_units.code_length).value),
+                            MN_params= MNParams(M = (68_193_902_782.346756 * u.Msun).to(code_units.code_mass).value,
+                                                a = (3.0 * u.kpc).to(code_units.code_length).value,
+                                                b = (0.280 * u.kpc).to(code_units.code_length).value),
+                            NFW_params= NFWParams(Mvir=(4.3683325e11 * u.Msun).to(code_units.code_mass).value,
+                                                r_s= (16.0 * u.kpc).to(code_units.code_length).value,),      
+                            PSP_params= PSPParams(M = 4501365375.06545 * u.Msun.to(code_units.code_mass),
+                                                    alpha = 1.8, 
+                                                    r_c = (1.9*u.kpc).to(code_units.code_length).value),                    
+                            G=code_units.G, ) 
+    return UniformBase(
+        low=jnp.array([1/4*params.t_end * code_units.code_time.to(u.Gyr),
+                        1/4 * log10(params.Plummer_params.Mtot * code_units.code_mass.to(u.Msun)), 
+                        1/4 * log10(params.NFW_params.Mvir * code_units.code_mass.to(u.Msun)), 
+                        1/4 * log10(params.MN_params.M * code_units.code_mass.to(u.Msun)), ]),
+        high=jnp.array([2*params.t_end * code_units.code_time.to(u.Gyr), 
+                        2 * log10(params.Plummer_params.Mtot * code_units.code_mass.to(u.Msun)), 
+                        2 * log10(params.NFW_params.Mvir * code_units.code_mass.to(u.Msun)), 
+                        2 * log10(params.MN_params.M * code_units.code_mass.to(u.Msun)), ]),
         shape=(4,)
     )
