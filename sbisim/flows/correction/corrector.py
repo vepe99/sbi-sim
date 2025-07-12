@@ -318,8 +318,8 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
         output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
 
         output = jnp.concatenate([flow_pred, t, output], axis=1)
-        # drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
-        drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention 
+        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention 
 
         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))

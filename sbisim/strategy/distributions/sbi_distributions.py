@@ -61,13 +61,13 @@ def get_odisseo_prior():
                                                     r_c = (1.9*u.kpc).to(code_units.code_length).value),                    
                             G=code_units.G, ) 
     return UniformBase(
-        low=jnp.array([1/4*params.t_end * code_units.code_time.to(u.Gyr),
-                        1/4 * log10(params.Plummer_params.Mtot * code_units.code_mass.to(u.Msun)), 
-                        1/4 * log10(params.NFW_params.Mvir * code_units.code_mass.to(u.Msun)), 
-                        1/4 * log10(params.MN_params.M * code_units.code_mass.to(u.Msun)), ]),
-        high=jnp.array([2*params.t_end * code_units.code_time.to(u.Gyr), 
-                        2 * log10(params.Plummer_params.Mtot * code_units.code_mass.to(u.Msun)), 
-                        2 * log10(params.NFW_params.Mvir * code_units.code_mass.to(u.Msun)), 
-                        2 * log10(params.MN_params.M * code_units.code_mass.to(u.Msun)), ]),
+        low=jnp.array([ 0.5,
+                        3, 
+                        1/4 * log10(4.3683325e11), 
+                        1/4 * log10(68_193_902_782.346756), ]),
+        high=jnp.array([5, 
+                        4.5, 
+                        2 * log10(4.3683325e11),
+                        2 * log10(68_193_902_782.346756),]),
         shape=(4,)
     )

@@ -14,7 +14,7 @@ learning_rate: 0.001
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e4_dataset.yaml
+  _file: configs/datasets/benchmarks/10e5_dataset.yaml
   normalization : True
 
 strategy:
@@ -57,7 +57,7 @@ strategy:
 
 
 training:
-  num_epochs: 5
+  num_epochs: 200
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
@@ -79,8 +79,8 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  # scatter:
-  #   target: sbisim.callbacks.BenchmarkScatterPlot
-  #   params:
-  #     save_every: 50
-  #     savedir: ${runtime.logdir}
+  scatter:
+    target: sbisim.callbacks.corner_plot_posterior
+    params:
+      save_every: 10
+      savedir: ${runtime.logdir}

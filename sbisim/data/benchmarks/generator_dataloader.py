@@ -310,8 +310,8 @@ class GeneratorDataloader_numpy(Iterable):
         reference_posterior = self.load_file(base_dir.joinpath(f"reference_posterior_samples.npy"))
 
         if self.normalize:
-            true_theta = (true_theta - self.mean_X) / self.std_X
-            reference_posterior = (reference_posterior - self.mean_X) / self.std_X
+            # true_theta = (true_theta - self.mean_X) / self.std_X
+            # reference_posterior = (reference_posterior - self.mean_X) / self.std_X
             observation = (observation - self.mean_y) / self.std_y
 
         return observation, true_theta, reference_posterior

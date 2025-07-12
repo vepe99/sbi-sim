@@ -8,7 +8,7 @@ controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.8
-batch_size: 5
+batch_size: 3
 weighting: one
 loss_type: fm_ot
 scaling_type: none
@@ -70,26 +70,63 @@ strategy:
         simulator:
           target: sbisim.simulations.OdisseoSimulator
         start_time: ${start_time}
+        # controlled_flow:
+        #   target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+        #   params:
+        #     import_samples: 5 
+        #     dim_flow: ${dim_flow}
+        #     sample_size:  32
+        #     in_channels:  3
+        #     out_channels: 10
+        # aggregation:
+        #   target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+        #   params:
+        #     import_samples: 5 
+        #     dim_flow: ${dim_flow}
+        #     sample_size:  32
+        #     in_channels:  3
+        #     out_channels: 10
         controlled_flow:
-          target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+          target: sbisim.flows.models.fmpe.DenseResidualNet
           params:
-            import_samples: 5 
-            dim_flow: ${dim_flow}
-            sample_size:  32
-            in_channels:  3
-            out_channels: 10
+            hidden_dims:
+            - 32
+            - 64
+            - 128
+            - 256
+            - 256
+            - 256
+            - 256
+            - 256
+            - 128
+            - 64
+            - 32
+            out_dim: ${dim_flow}
+            in_dim: ${controlled_flow_in_dim}
+            activation_fn: gelu
+            context_dim: ${context_dim}
         aggregation:
-          target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+          target: sbisim.flows.models.fmpe.DenseResidualNet
           params:
-            import_samples: 5 
-            dim_flow: ${dim_flow}
-            sample_size:  32
-            in_channels:  3
-            out_channels: 10
+            hidden_dims:
+            - 32
+            - 64
+            - 128
+            - 256
+            - 256
+            - 256
+            - 256
+            - 256
+            - 128
+            - 64
+            - 32
+            out_dim: ${aggregation_out_dim}
+            in_dim: ${aggregation_in_dim}
+            activation_fn: gelu
         freeze: true
 
 training:
-  num_epochs: 5
+  num_epochs: 2
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
@@ -111,8 +148,9 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  # scatter:
-  #   target: sbisim.callbacks.BenchmarkScatterPlot
-  #   params:
-  #     save_every: 25
-  #     savedir: ${runtime.logdir}
+  scatter:
+      target: sbisim.callbacks.corner_plot_posterior
+      params:
+        save_every: 1
+        savedir: ${runtime.logdir}
+        num_total_samples: 2000
