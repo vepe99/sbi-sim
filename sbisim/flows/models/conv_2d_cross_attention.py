@@ -78,11 +78,20 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         "CrossAttnDownBlock2D",
         "CrossAttnDownBlock2D",
         "DownBlock2D",
+        "DownBlock2D",
+        "DownBlock2D"
     )
-    up_block_types: Tuple[str, ...] = ("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D")
+    up_block_types: Tuple[str, ...] = (
+        "UpBlock2D", 
+        "UpBlock2D",
+        "UpBlock2D",
+        "CrossAttnUpBlock2D", 
+        "CrossAttnUpBlock2D", 
+        "CrossAttnUpBlock2D")
     only_cross_attention: Union[bool, Tuple[bool]] = False
     # block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280)
-    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64)
+    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, 64, 64)
+    # block_out_channels: Tuple[int, ...] = (64, 128, 256, 512, 1024)
     layers_per_block: int = 2
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
@@ -328,22 +337,27 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
 def get_simple_cross_attention_conv2d(
         sample_size: int = 160,
         dim_flow: int = 3,
-        import_samples: int = 5 
+        import_samples: int = 5, 
+        out_channels: int = 10,
+        in_channels: int = 4,
+        dropout: float = 0.0,
+        layers_per_block: int = 1,
 ):
     return Conv2DConditionModel(
         import_samples = import_samples,
         sample_size=sample_size,
         dim_flow=dim_flow,
-        in_channels=1,
-        out_channels=1,
-        down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D"),
+        in_channels=in_channels,
+        out_channels=out_channels,
+        down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D"),
+        up_block_types = ("CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D",),
         # block_out_channels=(64, 32, 64),
-        block_out_channels=(320, 640, 1280, 1280),
-        layers_per_block=1,
+        block_out_channels=(320, 640, 1280, 1280, 1280, 1280, 1280),
+        layers_per_block=layers_per_block,
         attention_head_dim=4,
         num_attention_heads=None,
         cross_attention_dim=64,
-        dropout=0.0,
+        dropout=dropout,
         flip_sin_to_cos=True,
         freq_shift=0,
         use_memory_efficient_attention=False,
@@ -360,11 +374,21 @@ class CrossAttentionCNF(ContinuousNormalizingFlow):
     dim_conditioning: int = 5  # Move this to the top
     sample_size: int = 32
     dim_flow: int = 3
-    in_channels: int = 4
+    in_channels: int = 3
     out_channels: int = 10
+    dropout: float = 0.0
+    layers_per_block : int = 2,
+
+
 
     def setup(self):
 
         super().setup()
 
-        self.model = get_simple_cross_attention_conv2d(self.sample_size, self.dim_flow)
+        self.model = get_simple_cross_attention_conv2d(sample_size=self.sample_size, 
+                                                       dim_flow=self.dim_flow, 
+                                                       in_channels=self.in_channels, 
+                                                       out_channels=self.out_channels,
+                                                       dropout=self.dropout,
+                                                       layers_per_block=self.layers_per_block
+                                                       )

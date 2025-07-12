@@ -46,7 +46,7 @@ class BenchmarkScatterPlot(Callback):
     name: str = 'benchmark_scatter_plot'
     save_every: int = 10
 
-    observation_idx: List[int] = [1,2]
+    observation_idx: List[int] = [1,2, 3, 4, 5, 6, 7, 8, 10]
     num_total_samples: int = 10000
     batch_size: int = 128
 
@@ -115,7 +115,7 @@ class corner_plot_posterior(Callback):
     name: str = 'corner_plot_posterior'
     save_every: int = 10
 
-    observation_idx: List[int] = [1,2]
+    observation_idx: List[int] = [1,2, 3, 4, 5, 6, 7, 8, 9, 10]
     num_total_samples: int = 10000
     batch_size: int = 128
 

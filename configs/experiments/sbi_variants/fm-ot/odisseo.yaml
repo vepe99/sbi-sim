@@ -50,7 +50,9 @@ strategy:
         dim_flow: ${dim_flow}
         sample_size:  32
         in_channels:  3
-        out_channels: 10
+        out_channels: 32
+        dropout: 0.1
+        # layers_per_block: 2
       # target: sbisim.flows.models.fmpe.ConvolutionalEmbeddingNet
       # params:
       #   out_channels: 10
@@ -58,7 +60,7 @@ strategy:
 
 training:
   num_epochs: 200
-  num_steps_per_epoch: 2000
+  num_steps_per_epoch: 5000
   batch_size: ${batch_size}
   early_stopping:
     patience: 50
@@ -82,5 +84,5 @@ callbacks:
   scatter:
     target: sbisim.callbacks.corner_plot_posterior
     params:
-      save_every: 10
+      save_every: 20
       savedir: ${runtime.logdir}
