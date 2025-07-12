@@ -2,6 +2,8 @@ import os
 import jax.numpy as np
 import pandas as pd 
 from tqdm import tqdm 
+import jax
+import jax.numpy as jnp 
 
 # def convert_to_csv(path_stored, path_to_save, num_simulations=1000):
 #     print('start converting all the npz files to csv')
@@ -49,6 +51,12 @@ def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
         observation.append(data['x'])
         true_theta.append(data['theta'])
         reference_posterior.append([])
+    print('x shape:', np.array(x).shape)
+    print('theta shape:', np.array(theta).shape)
+    print('observation shape:', np.array(observation).shape)
+    print('true_theta shape:', np.array(true_theta).shape)
+    print('reference_posterior shape:', np.array(reference_posterior).shape)
+
 
     np.save(os.path.join(path_to_save, f'x_{num_simulations}.npy'), x)
     np.save(os.path.join(path_to_save, f'theta_{num_simulations}.npy'), theta)
@@ -63,7 +71,6 @@ def num_observation_npy(path_stored, path_to_save, simulation_observation_index=
     all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[1000:1010] if f.endswith('.npz') and 'file' in f]
     x = []
     theta = []
-
     i=1
     for file_path in tqdm(all_data_path):
         path_to_save_num_observation = os.path.join(path_to_save, f'num_observation_{i}')
@@ -76,14 +83,36 @@ def num_observation_npy(path_stored, path_to_save, simulation_observation_index=
         np.save(os.path.join(path_to_save_num_observation, f'observation.npy'), x)
         np.save(os.path.join(path_to_save_num_observation, f'true_parameters.npy'), theta)
         i += 1
+    print('x shape:', np.array(x).shape)
+    print('theta shape:', np.array(theta).shape)
     print(f'done converting all the num_observation files in the folder {path_to_save}')
+
+def histogram_set(x):
+    ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins=bins, range=[[-120., 70.], [-8, 2]])
+    R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins=bins, range=[[6., 20.], [-250., 250.]])
+    vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins=bins, range=[[-2., 1.], [-0.1, 0.1]])
+    return jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
 
 
 if __name__ == "__main__":
-    path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/'
+    path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/'
     path_to_save = './data/sbi-benchmarks/odisseo/'
     # convert_to_csv(path_stored, path_to_save, num_simulations=1000)
     # convert_to_single_npy(path_stored, path_to_save, num_simulations=1_000)
-    num_observation_npy(path_stored, path_to_save, simulation_observation_index=range(1000, 1010))
+    # num_observation_npy(path_stored, path_to_save, simulation_observation_index=range(1000, 1010))
+
+    bins = (64, 32)
+
+
+    # Vectorize over batch dimension using vmap
+    batched_histogram = jax.vmap(histogram_set, in_axes=0)
+
+    # Example usage
+    key = jax.random.PRNGKey(0)
+    batch_size = 256
+    data = jax.random.normal(key, (batch_size, 5000, 6))
+
+    result = batched_histogram(data)  # shape: (batch_size, 3, 64, 32)
+    print(result.shape)
 
 
