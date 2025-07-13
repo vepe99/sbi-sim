@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from matplotlib import pyplot as plt
+from math import log10
 
 
 import pandas as pd
@@ -124,6 +125,14 @@ class corner_plot_posterior(Callback):
         self.save_every = save_every
         self.savedir = savedir
         self.num_total_samples = num_total_samples
+        self.low=jnp.array([ 0.5,
+                        3., 
+                        log10(1/4 * 4.3683325e11), 
+                         log10(1/4 *68_193_902_782.346756), ])
+        self.high=jnp.array([5, 
+                        4.5, 
+                        log10(2 * 4.3683325e11),
+                        log10(2 *68_193_902_782.346756),])
 
         if self.savedir is not None:
             os.makedirs(self.savedir + '/pictures', exist_ok=True)
@@ -144,6 +153,7 @@ class corner_plot_posterior(Callback):
             observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
             posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
                                                    batch_size=self.batch_size)
+            posterior_samples = 0.5 * (posterior_samples + 1) * (self.high-self.low) + self.low
             print(f"Posterior samples shape: {posterior_samples['samples'].shape}")
             print(f'True theta: {true_theta}')
             df = pd.DataFrame(posterior_samples["samples"], columns=['t_end', 'M_plummer', 'M_NFW', 'M_MN'])

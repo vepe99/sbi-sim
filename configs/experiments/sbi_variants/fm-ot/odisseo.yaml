@@ -4,7 +4,7 @@ dim_flow: 4
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 1024
+batch_size: 256
 
 weighting: 'one'
 loss_type: 'fm_ot'
@@ -46,12 +46,12 @@ strategy:
     model:
       target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
       params:
-        import_samples: 5 
+        import_samples: 10
         dim_flow: ${dim_flow}
-        sample_size:  32
+        sample_size:  64
         in_channels:  3
         out_channels: 32
-        dropout: 0.1
+        dropout: 0.4
         # layers_per_block: 2
       # target: sbisim.flows.models.fmpe.ConvolutionalEmbeddingNet
       # params:
@@ -84,5 +84,5 @@ callbacks:
   scatter:
     target: sbisim.callbacks.corner_plot_posterior
     params:
-      save_every: 20
+      save_every: 30
       savedir: ${runtime.logdir}

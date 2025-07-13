@@ -8,7 +8,7 @@ import jax.random as jr
 import jax.numpy as jnp
 
 import pandas as pd
-
+from math import log10
 
 class GeneratorDataloader(Iterable):
     num_samples: int
@@ -309,10 +309,13 @@ class GeneratorDataloader_numpy(Iterable):
 
         reference_posterior = self.load_file(base_dir.joinpath(f"reference_posterior_samples.npy"))
 
-        if self.normalize:
-            # true_theta = (true_theta - self.mean_X) / self.std_X
-            # reference_posterior = (reference_posterior - self.mean_X) / self.std_X
-            observation = (observation - self.mean_y) / self.std_y
+        # if self.normalize:
+        #     # true_theta = (true_theta - self.mean_X) / self.std_X
+        #     # reference_posterior = (reference_posterior - self.mean_X) / self.std_X
+        #     # observation = (observation - self.mean_y) / self.std_y
+        #     # Normalize each histogram to sum to 1 (convert to probability distribution)
+        #     total = jnp.sum(observation, axis=(1, 2), keepdims=True)
+        #     observation = observation / (total + 1e-8)  # Add epsilon to avoid division by zero
 
         return observation, true_theta, reference_posterior
     
@@ -373,16 +376,24 @@ class GeneratorDataloader_numpy(Iterable):
         self.X = self.X[perm]
         self.y = self.y[perm]
 
-        self.mean_X = self.X.mean(axis=0)
-        self.std_X = self.X.std(axis=0)
+        # self.mean_X = self.X.mean(axis=0)
+        # self.std_X = self.X.std(axis=0)
+        self.low=jnp.array([ 0.5,
+                        3., 
+                        log10(1/4 * 4.3683325e11), 
+                         log10(1/4 *68_193_902_782.346756), ])
+        self.high=jnp.array([5, 
+                        4.5, 
+                        log10(2 * 4.3683325e11),
+                        log10(2 *68_193_902_782.346756),])
 
         self.mean_y = self.y.mean(axis=0)
         self.std_y = self.y.std(axis=0)
 
         if self.normalize:
             print(f"Normalizing {self.dataset} data")
-            self.X = (self.X - self.mean_X) / self.std_X
-            print(f'Normalization of theta, mean X: {self.mean_X}, std X: {self.std_X}')
+            # self.X = (self.X - self.mean_X) / self.std_X
+            self.X = 2 * (self.X - self.low)/(self.high - self.low) - 1
             # self.y = (self.y - self.mean_y) / self.std_y #this normalization is not needed for the histogram representation
 
         self.X = self.X[split_start:split_end]

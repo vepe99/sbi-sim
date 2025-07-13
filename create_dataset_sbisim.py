@@ -1,16 +1,17 @@
 import os
 
-from autocvd import autocvd
-autocvd(num_gpus = 1)
+# from autocvd import autocvd
+# autocvd(num_gpus = 1)
 
 import jax.numpy as np
 import pandas as pd 
 from tqdm import tqdm 
 import jax
 import jax.numpy as jnp 
+import matplotlib.pyplot as plt
 
-from astropy import units as u
-from odisseo.units import CodeUnits
+# from astropy import units as u
+# from odisseo.units import CodeUnits
 
 # def convert_to_csv(path_stored, path_to_save, num_simulations=1000):
 #     print('start converting all the npz files to csv')
@@ -242,18 +243,29 @@ if __name__ == "__main__":
     # num_observation_npy(path_stored, path_to_save, simulation_observation_index=10_000)
 
     # Create everything in one call
-    summary = create_dataset(
-        path_stored, 
-        path_to_save, 
-        num_simulations=[10_000, 100_000], 
-        num_observations=10, 
-        seed=42
-    )
+    # summary = create_dataset(
+    #     path_stored, 
+    #     path_to_save, 
+    #     num_simulations=[10_000, 100_000], 
+    #     num_observations=10, 
+    #     seed=42
+    # )
     
-    print("\nSummary:")
-    print(f"Training datasets created: {list(summary['dataset_indices'].keys())}")
-    print(f"Single observation index: {summary['single_observation_index']}")
-    print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
-    print(f"Total files used: {summary['total_files_used']}")
+    # print("\nSummary:")
+    # print(f"Training datasets created: {list(summary['dataset_indices'].keys())}")
+    # print(f"Single observation index: {summary['single_observation_index']}")
+    # print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
+    # print(f"Total files used: {summary['total_files_used']}")
 
+    theta = np.load('/export/home/vgiusepp/sbi_diff_sim/sbi-sim/data/sbi-benchmarks/odisseo/theta_100000.npy')
+    fig = plt.figure()
+    for i in range(theta.shape[1]):
+        ax = fig.add_subplot(2, 2, i+1)
+        # if i > 1:
+        #     ax.hist(np.log10(theta[:, i]))
+        # else:
+        #     ax.hist(theta[:, i])
+        ax.hist(theta[:, i])
+        
+    fig.savefig('theta.png')
 
