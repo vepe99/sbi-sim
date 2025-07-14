@@ -6,6 +6,7 @@ from typing import Iterable, Tuple
 import jax
 import jax.random as jr
 import jax.numpy as jnp
+import numpy as np
 
 import pandas as pd
 from math import log10
@@ -70,9 +71,9 @@ class GeneratorDataloader(Iterable):
         :param replacement:
         """
 
-
+        DATA_ROOT = '/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks'
         path = Path(DATA_ROOT)
-        path = path.joinpath(dataset)
+        # path = path.joinpath(dataset)
 
         if num_samples not in [1000, 10000, 100000, 1000000, 10000000]:
             raise ValueError(f"num_samples ({num_samples}) must be in [1000, 10000, 100000, 1000000]")
@@ -294,11 +295,11 @@ class GeneratorDataloader_numpy(Iterable):
 
     def load_file(self, file):
 
-        return jnp.load(file, allow_pickle=True)
+        return np.load(file, allow_pickle=True)
 
     def get_observation(self, idx):
 
-        base_dir = Path(self.DATA_ROOT).joinpath(self.dataset).joinpath(f'num_observation_{idx}')
+        base_dir = Path(self.DATA_ROOT).joinpath(f'num_observation_{idx}')
 
         if not base_dir.exists():
             raise FileNotFoundError(f"Directory {base_dir} does not exist")
@@ -319,11 +320,6 @@ class GeneratorDataloader_numpy(Iterable):
 
         return observation, true_theta, reference_posterior
     
-    # def transform_in_histogram(self, bins=[64, 32]):
-    #     ph1_phi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 1], x[:, 2], bins = bins, range = [[-120., 70.], [-8, 2]] ),  batch_size=1, xs=self.y)
-    #     R_vR, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 0], x[:, 3], bins = bins, range = [[6., 20.], [-250., 250.]] ),  batch_size=1, xs= self.y)
-    #     vphicosphi2_vphi2, _, _ = jax.lax.map(lambda x: jnp.histogram2d(x[:, 4], x[:, 5], bins = bins, range = [[-2., 1.], [-0.1, 0.1 ]]), batch_size=1, xs=self.y)
-    #     self.y = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
 
     def __init__(self, dataset: str, DATA_ROOT: str, num_samples: int, split: Tuple[int], seed: jr.PRNGKey,
                  num_steps: int, batch_size: int, normalize: bool = True, replacement: bool = False, return_histogram: bool = False):
@@ -339,12 +335,13 @@ class GeneratorDataloader_numpy(Iterable):
         :param replacement:
         """
 
-
+        DATA_ROOT = f'/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/{dataset}/'
+        print(f"DATA_ROOT: {DATA_ROOT}")
         path = Path(DATA_ROOT)
-        path = path.joinpath(dataset)
+        # path = path.joinpath(dataset)
 
-        if num_samples not in [1000, 10000, 100000, 1000000, 10000000]:
-            raise ValueError(f"num_samples ({num_samples}) must be in [1000, 10000, 100000, 1000000]")
+        if num_samples not in [1000, 10000, 100_000, 250_000, 1_000_000, 10000000]:
+            raise ValueError(f"num_samples ({num_samples}) must be in [1000, 10000, 100000, 250_000, 1000000]")
 
         self.replacement = replacement
 
@@ -379,21 +376,22 @@ class GeneratorDataloader_numpy(Iterable):
         # self.mean_X = self.X.mean(axis=0)
         # self.std_X = self.X.std(axis=0)
         self.low=jnp.array([ 0.5,
-                        3., 
-                        log10(1/4 * 4.3683325e11), 
-                         log10(1/4 *68_193_902_782.346756), ])
+                            3., 
+                            log10(1/4 * 4.3683325e11), 
+                            log10(1/4 *68_193_902_782.346756), ])
         self.high=jnp.array([5, 
-                        4.5, 
-                        log10(2 * 4.3683325e11),
-                        log10(2 *68_193_902_782.346756),])
+                             4.5, 
+                             log10(2 * 4.3683325e11),
+                             log10(2 * 68_193_902_782.346756),])
 
         self.mean_y = self.y.mean(axis=0)
         self.std_y = self.y.std(axis=0)
 
         if self.normalize:
-            print(f"Normalizing {self.dataset} data")
+            pass
+            # print(f"Normalizing {self.dataset} data")
             # self.X = (self.X - self.mean_X) / self.std_X
-            self.X = 2 * (self.X - self.low)/(self.high - self.low) - 1
+            # self.X = 2 * (self.X - self.low)/(self.high - self.low) - 1
             # self.y = (self.y - self.mean_y) / self.std_y #this normalization is not needed for the histogram representation
 
         self.X = self.X[split_start:split_end]
@@ -410,11 +408,11 @@ class GeneratorDataloader_numpy(Iterable):
         if self.current_step <= self.num_steps:
 
             if not self.replacement:
-                X = self.X[self.batch_size * (self.current_step-1): self.batch_size * self.current_step]
-                y = self.y[self.batch_size * (self.current_step-1): self.batch_size * self.current_step]
+                X = jnp.array(self.X[self.batch_size * (self.current_step-1): self.batch_size * self.current_step])
+                y = jnp.array(self.y[self.batch_size * (self.current_step-1): self.batch_size * self.current_step])
             else:
-                X = self.X[jr.choice(self.rng, self.num_samples, (self.batch_size,))]
-                y = self.y[jr.choice(self.rng, self.num_samples, (self.batch_size,))]
+                X = jnp.array(self.X[jr.choice(self.rng, self.num_samples, (self.batch_size,))])
+                y = jnp.array(self.y[jr.choice(self.rng, self.num_samples, (self.batch_size,))])
                 self.rng = jr.split(self.rng)[0]
 
             self.current_step += 1
@@ -429,7 +427,7 @@ class GeneratorDataloader_numpy(Iterable):
     
     def load_data_from_hf(self, dataset, path):
 
-        path_dir = Path(path).joinpath(dataset)
+        path_dir = Path(path)
         if not path_dir.exists():
 
             # download folder from huggingface

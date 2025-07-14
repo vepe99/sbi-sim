@@ -43,28 +43,11 @@ def get_lotka_volterra_prior():
 
 def get_odisseo_prior():
 
-    code_length = 10.0 * u.kpc
-    code_mass = 1e4 * u.Msun
-    code_time = 3 * u.Gyr
-    code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-
-    params = SimulationParams(t_end = (3 * u.Gyr).to(code_units.code_time).value,  
-                            Plummer_params= PlummerParams(Mtot=(10**4.05 * u.Msun).to(code_units.code_mass).value,
-                                                            a=(8 * u.pc).to(code_units.code_length).value),
-                            MN_params= MNParams(M = (68_193_902_782.346756 * u.Msun).to(code_units.code_mass).value,
-                                                a = (3.0 * u.kpc).to(code_units.code_length).value,
-                                                b = (0.280 * u.kpc).to(code_units.code_length).value),
-                            NFW_params= NFWParams(Mvir=(4.3683325e11 * u.Msun).to(code_units.code_mass).value,
-                                                r_s= (16.0 * u.kpc).to(code_units.code_length).value,),      
-                            PSP_params= PSPParams(M = 4501365375.06545 * u.Msun.to(code_units.code_mass),
-                                                    alpha = 1.8, 
-                                                    r_c = (1.9*u.kpc).to(code_units.code_length).value),                    
-                            G=code_units.G, ) 
     return UniformBase(
         low=jnp.array([ 0.5,
                         3, 
                         log10(1/4 * 4.3683325e11), 
-                         log10(1/4 *68_193_902_782.346756), ]),
+                        log10(1/4 *68_193_902_782.346756), ]),
         high=jnp.array([5, 
                         4.5, 
                         log10(2 * 4.3683325e11),

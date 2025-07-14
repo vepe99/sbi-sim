@@ -117,10 +117,10 @@ class corner_plot_posterior(Callback):
     save_every: int = 10
 
     observation_idx: List[int] = [1,2, 3, 4, 5, 6, 7, 8, 9, 10]
-    num_total_samples: int = 10000
-    batch_size: int = 128
+    num_total_samples: int = 5_000
+    batch_size: int = 5_000
 
-    def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 10_000,):
+    def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 5_000,):
         super().__init__()
         self.save_every = save_every
         self.savedir = savedir
@@ -153,7 +153,7 @@ class corner_plot_posterior(Callback):
             observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
             posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
                                                    batch_size=self.batch_size)
-            posterior_samples = 0.5 * (posterior_samples + 1) * (self.high-self.low) + self.low
+            # posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
             print(f"Posterior samples shape: {posterior_samples['samples'].shape}")
             print(f'True theta: {true_theta}')
             df = pd.DataFrame(posterior_samples["samples"], columns=['t_end', 'M_plummer', 'M_NFW', 'M_MN'])
@@ -167,18 +167,6 @@ class corner_plot_posterior(Callback):
                 'M_MN': true_theta[0, 3],
             }))
             fig = c.plotter.plot()
-
-            # fig = plt.figure(figsize=(10, 10))
-            # plt.scatter(reference_posterior[:, 0], reference_posterior[:, 1], label="Reference Posterior", alpha=0.2)
-            # plt.scatter(posterior_samples["samples"][:, 0], posterior_samples["samples"][:, 1],
-            #             label="Posterior Samples", alpha=0.2)
-
-            # plt.legend()
-            # plt.xlabel("Parameter 1")
-            # plt.ylabel("Parameter 2")
-
-            # plt.title(f"Observation {id}")
-
 
             epoch = logs["epoch"]
 
@@ -196,6 +184,87 @@ class corner_plot_posterior(Callback):
 
     # def on_train_begin(self, *args, **kwargs):
     #     return self.__call__(*args, init=True, **kwargs)
+    
+    def on_train_end(self, *args, **kwargs):
+        return self.__call__(*args, init=True, **kwargs)
+
+    def on_epoch_end(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+
+        if "epoch" in logs and logs["epoch"] % self.save_every == 0:
+            return self.__call__(logs, rng, *args, **kwargs)
+        else:
+            return logs, rng
+        
+class true_predicted_plot(Callback):
+
+    name: str = 'corner_plot_posterior'
+    save_every: int = 10
+
+    observation_idx: List[int] = [1,2, 3, 4, 5, 6, 7, 8, 9, 10]
+    num_total_samples: int = 5000
+    batch_size: int = 1024
+
+    def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 10_000,):
+        super().__init__()
+        self.save_every = save_every
+        self.savedir = savedir
+        self.num_total_samples = num_total_samples
+        self.low=jnp.array([ 0.5,
+                        3., 
+                        log10(1/4 * 4.3683325e11), 
+                         log10(1/4 *68_193_902_782.346756), ])
+        self.high=jnp.array([5, 
+                        4.5, 
+                        log10(2 * 4.3683325e11),
+                        log10(2 * 68_193_902_782.346756),])
+
+        if self.savedir is not None:
+            os.makedirs(self.savedir + '/pictures', exist_ok=True)
+        
+    def __call__(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+        return self._call(logs, rng, *args, **kwargs)
+
+    def _call(self, logs: dict, rng: jr.PRNGKey, strategy: Strategy,
+              train_loader: GeneratorDataloader, val_loader: GeneratorDataloader, *args, **kwargs) \
+            -> Tuple[dict, jr.PRNGKey]:
+
+        labels = ['$t_{end}$', '$M_{plummer}$', '$M_{NFW}$', '$M_{MN}$']
+        figure_list = []
+
+        fig = plt.figure(figsize=(10, 10))
+
+        for i in range(4):
+            for id in self.observation_idx:             
+                ax = fig.add_subplot(1, 4, i+1)
+
+                observation, true_theta, reference_posterior = train_loader.get_observation(id)
+
+                observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
+                posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
+                                                    batch_size=self.batch_size)
+                # posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
+                print(f"Posterior samples shape: {posterior_samples['samples'].shape}")
+                print(f'True theta: {true_theta}')
+
+                ax.errorbar(observation[:, i], jnp.mean(posterior_samples["samples"][:, i],),
+                            yerr=jnp.std(posterior_samples["samples"][:, i], ), fmt='o', )
+                ax.set_xlabel(f'True {labels[i]}')
+                ax.set_ylabel(f'Predicted {labels[i]}')
+            
+            epoch = logs["epoch"]
+
+        if self.savedir is not None:
+            plt.savefig(f"{self.savedir}/pictures/true_predicted_plot_{epoch}.png")
+
+        figure_list.append(fig)
+
+        logs['posteriors'] = [wandb.Image(fig) for fig in figure_list]
+
+        for fig in figure_list:
+            plt.close(fig)
+
+        return logs, rng
+
     
     def on_train_end(self, *args, **kwargs):
         return self.__call__(*args, init=True, **kwargs)

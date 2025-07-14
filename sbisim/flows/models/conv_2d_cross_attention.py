@@ -69,8 +69,8 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             enabling this flag should speed up the computation for Stable Diffusion 2.x and Stable Diffusion XL.
     """
     import_samples: int = 5 # or whatever type this should be
-    sample_size: int = 32
-    dim_flow: int = 3
+    sample_size: int = 64
+    dim_flow: int = 4
     in_channels: int = 4
     out_channels: int = 4
     down_block_types: Tuple[str, ...] = (
@@ -81,15 +81,15 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         "DownBlock2D",
     )
     up_block_types: Tuple[str, ...] = (
-        "UpBlock2D", 
+        "UpBlock2D",
         "UpBlock2D", 
         "CrossAttnUpBlock2D", 
         "CrossAttnUpBlock2D", 
         "CrossAttnUpBlock2D")
     only_cross_attention: Union[bool, Tuple[bool]] = False
-    # block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280)
-    # block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, )
-    block_out_channels: Tuple[int, ...] = (64, 128, 256, 512, 1024)
+    # block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280, 1280)
+    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, 64)
+    # block_out_channels: Tuple[int, ...] = (64, 128, 256, 512, 1024)
     layers_per_block: int = 2
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
@@ -106,10 +106,12 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     addition_time_embed_dim: Optional[int] = None
     addition_embed_type_num_heads: int = 64
     projection_class_embeddings_input_dim: Optional[int] = None
+    mean_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std.npz')['mean_x']
+    std_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std.npz')['std_x']
 
     def init_weights(self, rng: jax.Array) -> FrozenDict:
         # init input tensors
-        sample_shape = (1, self.in_channels, self.sample_size, self.sample_size)
+        sample_shape = (1, self.in_channels, self.sample_size, int(self.sample_size/2))
         sample = jnp.zeros(sample_shape, dtype=jnp.float32)
         timesteps = jnp.ones((1,), dtype=jnp.int32)
         encoder_hidden_states = jnp.zeros((1, 1, self.cross_attention_dim), dtype=jnp.float32)
@@ -248,9 +250,10 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins=bins, range=[[-2., 1.], [-0.1, 0.1]])
         histograms = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
     
-        # Normalize each histogram to sum to 1 (convert to probability distribution)
-        total = jnp.sum(histograms, axis=(1, 2), keepdims=True)
-        normalized_histograms = histograms / (total + 1e-8)  # Add epsilon to avoid division by zero
+        # # Normalize each histogram to sum to 1 (convert to probability distribution)
+        # total = jnp.sum(histograms, axis=(1, 2), keepdims=True)
+        # normalized_histograms = histograms / (total + 1e-8)  # Add epsilon to avoid division by zero
+        normalized_histograms = (histograms - self.mean_histogram) / self.std_histogram
         
         return normalized_histograms
     
@@ -390,3 +393,109 @@ class CrossAttentionCNF(ContinuousNormalizingFlow):
                                                        dropout=self.dropout,
                                                        layers_per_block=self.layers_per_block
                                                        )
+        
+
+
+# import flax.linen as nn
+# import jax
+# import jax.numpy as jnp
+# from diffusers.models.embeddings_flax import FlaxTimestepEmbedding, FlaxTimesteps
+
+# class ConvBlock(nn.Module):
+#     """A block of two 3x3 convolutions with ReLU activations."""
+#     features: int
+    
+#     @nn.compact
+#     def __call__(self, x):
+#         x = nn.Conv(features=self.features, kernel_size=(3, 3), padding='SAME')(x)
+#         x = nn.relu(x)
+#         x = nn.Conv(features=self.features, kernel_size=(3, 3), padding='SAME')(x)
+#         x = nn.relu(x)
+#         return x
+
+# class UNet(nn.Module):
+#     """A U-Net model for inference in the continuous normalizing flow."""
+#     dim_flow: int = 3
+
+#     def histogram_set(self, x):
+#         """Converts input data to a set of 2D histograms."""
+#         bins = [64, 32]
+#         ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins=bins, range=[[-120., 70.], [-8, 2]])
+#         R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins=bins, range=[[6., 20.], [-250., 250.]])
+#         vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins=bins, range=[[-2., 1.], [-0.1, 0.1]])
+#         histograms = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
+    
+#         # Normalize each histogram to sum to 1
+#         total = jnp.sum(histograms, axis=(1, 2), keepdims=True)
+#         normalized_histograms = histograms / (total + 1e-8) # Add epsilon to avoid division by zero
+        
+#         return normalized_histograms
+
+#     @nn.compact
+#     def __call__(self, t: jnp.ndarray, x: jnp.ndarray, conditioning: jnp.ndarray, params=None, rngs=None):
+#         """
+#         Defines the forward pass of the U-Net.
+
+#         Args:
+#             t: Timestep array.
+#             x: The flow variable being integrated by the ODE solver.
+#             conditioning: The conditioning data.
+
+#         Returns:
+#             The computed derivative for the ODE solver.
+#         """
+#         # 1. Convert conditioning data into a batch of images (histograms).
+#         # We use vmap to apply the histogram function over the batch dimension.
+#         cond_image = jax.vmap(self.histogram_set, in_axes=0)(conditioning)
+#         # Transpose from (N, C, H, W) to (N, H, W, C) for Flax Conv layers.
+#         cond_image = jnp.transpose(cond_image, (0, 2, 3, 1))
+
+#         # 2. Create embeddings for time `t` and flow variable `x`.
+#         t_emb = FlaxTimestepEmbedding(128)(FlaxTimesteps(64, flip_sin_to_cos=True, freq_shift=0)(t))
+#         x_emb = nn.Dense(features=128, name="x_embedding")(x)
+        
+#         # Combine embeddings into a single vector.
+#         emb = jnp.concatenate([t_emb, x_emb], axis=-1)
+#         emb = nn.Dense(features=512, name="combined_embedding")(emb)
+#         emb = nn.relu(emb)
+
+#         # 3. U-Net Architecture
+#         # Encoder Path
+#         conv1 = ConvBlock(features=64, name="encoder_conv1")(cond_image)
+#         pool1 = nn.max_pool(conv1, window_shape=(2, 2), strides=(2, 2))
+
+#         conv2 = ConvBlock(features=128, name="encoder_conv2")(pool1)
+#         pool2 = nn.max_pool(conv2, window_shape=(2, 2), strides=(2, 2))
+
+#         # Bottleneck
+#         bottleneck = ConvBlock(features=256, name="bottleneck_conv")(pool2)
+
+#         # Inject the combined time and x embedding into the bottleneck.
+#         emb_proj = nn.Dense(features=256, name="embedding_projection")(emb)
+#         bottleneck += emb_proj[:, None, None, :] # Broadcast across spatial dimensions
+
+#         # Decoder Path
+#         up1 = nn.ConvTranspose(features=128, kernel_size=(2, 2), strides=(2, 2), name="decoder_up1")(bottleneck)
+#         concat1 = jnp.concatenate([up1, conv2], axis=-1) # Skip connection
+#         deconv1 = ConvBlock(features=128, name="decoder_conv1")(concat1)
+
+#         up2 = nn.ConvTranspose(features=64, kernel_size=(2, 2), strides=(2, 2), name="decoder_up2")(deconv1)
+#         concat2 = jnp.concatenate([up2, conv1], axis=-1) # Skip connection
+#         deconv2 = ConvBlock(features=64, name="decoder_conv2")(concat2)
+
+#         # 4. Output Head
+#         # Global average pooling to reduce spatial dimensions to a feature vector.
+#         final_features = jnp.mean(deconv2, axis=(1, 2))
+        
+#         # Final dense layer to project to the desired output dimension.
+#         output = nn.Dense(features=self.dim_flow, name="output_dense")(final_features)
+
+#         return output
+    
+#     class UNetCNF(ContinuousNormalizingFlow):
+#         """A ContinuousNormalizingFlow that uses a U-Net for the dynamics function."""
+#         dim_flow: int = 4
+
+#         def setup(self):
+#             super().setup()
+#             self.model = UNet(dim_flow=self.dim_flow)
