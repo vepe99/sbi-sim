@@ -1,17 +1,20 @@
 import os
 
+# import os
+# os.environ['JAX_PLATFORM_NAME'] = 'cpu'
+
 # from autocvd import autocvd
 # autocvd(num_gpus = 1)
 
-import jax.numpy as np
+import numpy as np
 import pandas as pd 
 from tqdm import tqdm 
 import jax
-import jax.numpy as jnp 
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-# from astropy import units as u
-# from odisseo.units import CodeUnits
+from astropy import units as u
+from odisseo.units import CodeUnits
 
 # def convert_to_csv(path_stored, path_to_save, num_simulations=1000):
 #     print('start converting all the npz files to csv')
@@ -48,18 +51,18 @@ def to_inference_parameters(theta, ):
         """
         convert from simulation parameters to inference parameters
         """
-        code_length = 10.0 * u.kpc
-        code_mass = 1e4 * u.Msun
-        code_time = 3 * u.Gyr
-        code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+        # code_length = 10.0 * u.kpc
+        # code_mass = 1e4 * u.Msun
+        # code_time = 3 * u.Gyr
+        # code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
 
         theta[0] = theta[0] # t_end is already in Gyr
         theta[1] = np.log10(theta[1]).item() # Plummer mass is already in Msun
-        theta[2] = theta[2] * code_units.code_length.to(u.kpc) # Plummer a
-        theta[3] = np.log10(theta[3] * code_units.code_mass.to(u.Msun)).item()  # NFW Mvir
-        theta[4] = theta[4] * code_units.code_length.to(u.kpc)  # NFW r_s
-        theta[5] = np.log10(theta[5] * code_units.code_mass.to(u.Msun)).item() # MN M
-        theta[6] = theta[6] * code_units.code_length.to(u.kpc) # MN a
+        # theta[2] = theta[2] * code_units.code_length.to(u.kpc) # Plummer a
+        theta[3] = np.log10(theta[3] * 1e4).item()  # NFW Mvir
+        # theta[4] = theta[4] * code_units.code_length.to(u.kpc)  # NFW r_s
+        theta[5] = np.log10(theta[5] * 1e4).item() # MN M
+        # theta[6] = theta[6] * code_units.code_length.to(u.kpc) # MN a
         return theta
 
 def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
@@ -220,7 +223,7 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
         # Accumulate for logging
         x_all.append(data['x'][:1000])
         theta_all.append(to_inference_parameters(data['theta'])[[0, 1, 3, 5]])
-    
+
     print(f'Multiple observations - x shape: {np.array(x_all).shape}')
     print(f'Multiple observations - theta shape: {np.array(theta_all).shape}')
     print(f'Created {num_observations} observation directories')
@@ -237,7 +240,7 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
 
 if __name__ == "__main__":
     path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/'
-    path_to_save = './data/sbi-benchmarks/odisseo/'
+    path_to_save = '/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo/'
     # convert_to_csv(path_stored, path_to_save, num_simulations=1000)
     # convert_to_single_npy(path_stored, path_to_save, num_simulations=10_000)
     # num_observation_npy(path_stored, path_to_save, simulation_observation_index=10_000)
@@ -246,7 +249,7 @@ if __name__ == "__main__":
     # summary = create_dataset(
     #     path_stored, 
     #     path_to_save, 
-    #     num_simulations=[10_000, 100_000], 
+    #     num_simulations=[200_000], 
     #     num_observations=10, 
     #     seed=42
     # )
@@ -257,15 +260,17 @@ if __name__ == "__main__":
     # print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
     # print(f"Total files used: {summary['total_files_used']}")
 
-    theta = np.load('/export/home/vgiusepp/sbi_diff_sim/sbi-sim/data/sbi-benchmarks/odisseo/theta_100000.npy')
+    theta = np.load('/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo/theta_100000.npy')
     fig = plt.figure()
     for i in range(theta.shape[1]):
         ax = fig.add_subplot(2, 2, i+1)
-        # if i > 1:
-        #     ax.hist(np.log10(theta[:, i]))
-        # else:
-        #     ax.hist(theta[:, i])
         ax.hist(theta[:, i])
         
     fig.savefig('theta.png')
 
+    # code_length = 10.0 * u.kpc
+    # code_mass = 1e4 * u.Msun
+    # code_time = 3 * u.Gyr
+    # code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+    # print('unit length to kpc' , code_units.code_length.to(u.kpc))
+    # print('unit mass to Msun' , code_units.code_mass.to(u.Msun))
