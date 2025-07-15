@@ -280,7 +280,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
     def mmd(self, theta_1, target):
 
         simulator_rng = self.make_rng('simulator')
-        print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
         output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
                                         rng=simulator_rng, deterministic=True, )  # noqa
 
@@ -288,7 +288,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
 
         # output = output * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
         # target = target * self.simulator_impl.std_Y + self.simulator_impl.mean_Y
-        print(f" In the corrector: output shape: {output.shape}, target shape: {target.shape}")
+        # print(f" In the corrector: output shape: {output.shape}, target shape: {target.shape}")
         
         return percintile_based_mmd(output, target) 
         
@@ -308,7 +308,7 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
 
         theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
 
-        print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
         grad_fn = vmap(value_and_grad(self.mmd), in_axes=0)
         loss, grad = grad_fn(theta_1, context)
 

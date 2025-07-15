@@ -90,5 +90,5 @@ callbacks:
     params:
       save_every: 30
       savedir: ${runtime.logdir}
-      num_total_samples: 5_000
-      observation_idx: 100
+      num_total_samples: 1_000
+      observation_idx: 1000
