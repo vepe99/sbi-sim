@@ -83,11 +83,12 @@ callbacks:
     params:
       save_every: 30
       savedir: ${runtime.logdir}
-      num_total_samples: 1_000
+      num_total_samples: 5_000
       observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-  scatter2:
+  ranks:
     target: sbisim.callbacks.ranks
     params:
       save_every: 30
       savedir: ${runtime.logdir}
-      observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      num_total_samples: 5_000
+      observation_idx: 100

@@ -74,32 +74,25 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     in_channels: int = 4
     out_channels: int = 4
     down_block_types: Tuple[str, ...] = (
-        # "CrossAttnDownBlock2D", 
-        # "CrossAttnDownBlock2D",
-        # "CrossAttnDownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
-        "DownBlock2D",
+        "CrossAttnDownBlock2D", 
+        "CrossAttnDownBlock2D",
+        "CrossAttnDownBlock2D",
         "DownBlock2D",
         "DownBlock2D",
     )
     up_block_types: Tuple[str, ...] = (
         "UpBlock2D",
         "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",
-        "UpBlock2D",)
-        # "CrossAttnUpBlock2D", 
-        # "CrossAttnUpBlock2D", 
-        # "CrossAttnUpBlock2D")
+        "CrossAttnUpBlock2D", 
+        "CrossAttnUpBlock2D", 
+        "CrossAttnUpBlock2D",
+        )
     only_cross_attention: Union[bool, Tuple[bool]] = False
     # block_out_channels: Tuple[int, ...] = (320, 640, 1280, 1280, 1280)
     # block_out_channels: Tuple[int, ...] = (64, 64, 64, 64,)
-    # block_out_channels: Tuple[int, ...] = (64, 128, 256, 512, )
-    block_out_channels: Tuple[int, ...] = (32, 32, 32, 32, 32, 32, )
-    layers_per_block: int = 1
+    block_out_channels: Tuple[int, ...] = (64, 128, 256, 512, 512)
+    # block_out_channels: Tuple[int, ...] = (32, 32, 32, 32, 32, 32, 32)
+    layers_per_block: int = 4
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
     cross_attention_dim: int = 1280

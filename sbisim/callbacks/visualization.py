@@ -229,11 +229,11 @@ class ranks(Callback):
     name: str = 'rankss'
     save_every: int = 10
 
-    observation_idx: List[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # observation_idx: List[int] = [i for i in range(1, observation_idx)]
     num_total_samples: int = 1_000
     batch_size: int = 1_000
 
-    def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 1_000,observation_idx: List[int] = observation_idx):
+    def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 1_000, observation_idx: int = 10):
         super().__init__()
         self.save_every = save_every
         self.savedir = savedir
@@ -246,7 +246,7 @@ class ranks(Callback):
                         10**4.5, 
                         10**log10(2 * 4.3683325e11),
                         10**log10(2 * 68_193_902_782.346756),])
-        self.observation_idx = observation_idx
+        self.observation_idx = [i for i in range(1, observation_idx)]
         self.labels = ['$t_{end}$', '$M_{plummer}$', '$M_{NFW}$', '$M_{MN}$']
         if self.savedir is not None:
             os.makedirs(self.savedir + '/pictures', exist_ok=True)
