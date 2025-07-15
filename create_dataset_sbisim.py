@@ -264,7 +264,12 @@ if __name__ == "__main__":
     fig = plt.figure()
     for i in range(theta.shape[1]):
         ax = fig.add_subplot(2, 2, i+1)
-        ax.hist(theta[:, i])
+        if i > 0:
+            ax.hist(10**theta[:, i])
+            print(f'Mean of parameter {i}: {jnp.mean(theta[:, i])}')
+            print(f'max of parameter {i}: {jnp.max(theta[:, i])}')
+        else:
+            ax.hist(theta[:, i])
         
     fig.savefig('theta.png')
 

@@ -153,18 +153,18 @@ class corner_plot_posterior(Callback):
             observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
             posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
                                                    batch_size=self.batch_size)
-            # posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
+            posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
             print(f"Posterior samples shape: {posterior_samples['samples'].shape}")
             print(f'True theta: {true_theta}')
-            df = pd.DataFrame(posterior_samples["samples"], columns=['t_end', 'M_plummer', 'M_NFW', 'M_MN'])
+            df = pd.DataFrame(posterior_samples["samples"], columns=[r'$t_{end}$', r'$M_{plummer}$', r'$M_{NFW}$', r'$M_{MN}$'])
             # Create corner plot with ChainConsumer
             c = ChainConsumer()
             c.add_chain(Chain(samples=df, name="Experimental Results", ), )
             c.add_truth(Truth(location={
-                't_end': true_theta[0, 0], 
-                'M_plummer': true_theta[0, 1],
-                'M_NFW': true_theta[0, 2], 
-                'M_MN': true_theta[0, 3],
+                r'$t_{end}$': true_theta[0, 0], 
+                r'$M_{plummer}$': true_theta[0, 1],
+                r'$M_{NFW}$': true_theta[0, 2], 
+                r'$M_{MN}$': true_theta[0, 3],
             }))
             fig = c.plotter.plot()
 
@@ -200,8 +200,8 @@ class true_predicted_plot(Callback):
     name: str = 'corner_plot_posterior'
     save_every: int = 10
 
-    observation_idx: List[int] = [1,2, 3, 4, 5, 6, 7, 8, 9, 10]
-    num_total_samples: int = 5000
+    observation_idx: List[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    num_total_samples: int = 1000
     batch_size: int = 1024
 
     def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 10_000,):
@@ -239,15 +239,20 @@ class true_predicted_plot(Callback):
 
                 observation, true_theta, reference_posterior = train_loader.get_observation(id)
 
+                observation_for_plot = observation.copy()
                 observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
                 posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
                                                     batch_size=self.batch_size)
-                # posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
+                posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
                 print(f"Posterior samples shape: {posterior_samples['samples'].shape}")
+                print(f'Observation shape: {observation_for_plot.shape}')
+                print(f'Observation 0 {observation_for_plot[0, i]}')
+                print(f'mean posterior sample {jnp.mean(posterior_samples["samples"][:, i],).item()}')
+                print(f'std posterior sample {jnp.std(posterior_samples["samples"][:, i], ).item()}')
                 print(f'True theta: {true_theta}')
 
-                ax.errorbar(observation[:, i], jnp.mean(posterior_samples["samples"][:, i],),
-                            yerr=jnp.std(posterior_samples["samples"][:, i], ), fmt='o', )
+                ax.errorbar(observation_for_plot[0, i].item(), jnp.mean(posterior_samples["samples"][:, i],).item(),
+                            yerr=jnp.std(posterior_samples["samples"][:, i], ).item(), fmt='o', )
                 ax.set_xlabel(f'True {labels[i]}')
                 ax.set_ylabel(f'Predicted {labels[i]}')
             

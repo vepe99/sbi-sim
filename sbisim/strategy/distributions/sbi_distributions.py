@@ -1,7 +1,4 @@
 from .base_distribution import UniformBase, LogNormalBase, GaussianBase
-from odisseo.option_classes import SimulationParams, MNParams, NFWParams, PlummerParams, PSPParams
-from odisseo.units import CodeUnits
-from astropy import units as u
 
 import jax.numpy as jnp
 from math import log10
@@ -43,14 +40,19 @@ def get_lotka_volterra_prior():
 
 def get_odisseo_prior():
 
+    # return UniformBase(
+    #     low=jnp.array([ 0.5,
+    #                     3, 
+    #                     log10(1/4 * 4.3683325e11), 
+    #                     log10(1/4 * 68_193_902_782.346756), ]),
+    #     high=jnp.array([5, 
+    #                     4.5, 
+    #                     log10(2 * 4.3683325e11),
+    #                     log10(2 * 68_193_902_782.346756),]),
+    #     shape=(4,)
+    # )
     return UniformBase(
-        low=jnp.array([ 0.5,
-                        3, 
-                        log10(1/4 * 4.3683325e11), 
-                        log10(1/4 *68_193_902_782.346756), ]),
-        high=jnp.array([5, 
-                        4.5, 
-                        log10(2 * 4.3683325e11),
-                        log10(2 *68_193_902_782.346756),]),
+        low = -1 * jnp.ones(4),
+        high = jnp.ones(4),
         shape=(4,)
     )

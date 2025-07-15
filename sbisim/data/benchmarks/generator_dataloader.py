@@ -373,8 +373,8 @@ class GeneratorDataloader_numpy(Iterable):
         self.X = self.X[perm]
         self.y = self.y[perm]
 
-        # self.mean_X = self.X.mean(axis=0)
-        # self.std_X = self.X.std(axis=0)
+        self.mean_X = self.X.mean(axis=0)
+        self.std_X = self.X.std(axis=0)
         self.low=jnp.array([ 0.5,
                             3., 
                             log10(1/4 * 4.3683325e11), 
@@ -387,11 +387,13 @@ class GeneratorDataloader_numpy(Iterable):
         self.mean_y = self.y.mean(axis=0)
         self.std_y = self.y.std(axis=0)
 
+        print(f"mean_X: {self.mean_X}, std_X: {self.std_X}")
+
         if self.normalize:
             pass
             # print(f"Normalizing {self.dataset} data")
             # self.X = (self.X - self.mean_X) / self.std_X
-            # self.X = 2 * (self.X - self.low)/(self.high - self.low) - 1
+            self.X = 2 * (self.X - self.low)/(self.high - self.low) - 1
             # self.y = (self.y - self.mean_y) / self.std_y #this normalization is not needed for the histogram representation
 
         self.X = self.X[split_start:split_end]
