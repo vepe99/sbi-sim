@@ -307,6 +307,7 @@ class GeneratorDataloader_numpy(Iterable):
         observation = self.load_file(base_dir.joinpath(f"observation.npy"))
 
         true_theta = self.load_file(base_dir.joinpath(f"true_parameters.npy"))
+        true_theta[:, 1:] = 10**true_theta[:, 1:]  # convert to original scale
 
         reference_posterior = self.load_file(base_dir.joinpath(f"reference_posterior_samples.npy"))
 
@@ -361,6 +362,7 @@ class GeneratorDataloader_numpy(Iterable):
 
         self.y = self.load_file(path.joinpath(f"x_{num_samples}.npy"))
         self.X = self.load_file(path.joinpath(f"theta_{num_samples}.npy"))
+        self.X[:, 1:] = 10**self.X[:, 1:]  # convert to original scale
 
         # if return_histogram == True:
         #     self.y = jnp.reshape(self.y, (-1, 5000, 6))
@@ -376,13 +378,13 @@ class GeneratorDataloader_numpy(Iterable):
         self.mean_X = self.X.mean(axis=0)
         self.std_X = self.X.std(axis=0)
         self.low=jnp.array([ 0.5,
-                            3., 
-                            log10(1/4 * 4.3683325e11), 
-                            log10(1/4 *68_193_902_782.346756), ])
+                            10**3., 
+                            10**log10(1/4 * 4.3683325e11), 
+                            10**log10(1/4 *68_193_902_782.346756), ])
         self.high=jnp.array([5, 
-                             4.5, 
-                             log10(2 * 4.3683325e11),
-                             log10(2 * 68_193_902_782.346756),])
+                             10**4.5, 
+                             10**log10(2 * 4.3683325e11),
+                             10**log10(2 * 68_193_902_782.346756),])
 
         self.mean_y = self.y.mean(axis=0)
         self.std_y = self.y.std(axis=0)

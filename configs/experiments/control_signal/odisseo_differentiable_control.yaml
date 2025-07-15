@@ -153,4 +153,4 @@ callbacks:
       params:
         save_every: 1
         savedir: ${runtime.logdir}
-        num_total_samples: 2000
+        num_total_samples: 1000

@@ -4,7 +4,7 @@ dim_flow: 4
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 1024
+batch_size: 256
 
 weighting: 'one'
 loss_type: 'flow'
@@ -50,8 +50,8 @@ strategy:
         dim_flow: ${dim_flow}
         sample_size:  64
         in_channels:  3
-        out_channels: 64
-        dropout: 0.1
+        out_channels: 4
+        dropout: 0.05
 
 
 
@@ -68,7 +68,7 @@ training:
 #     c2st:
 #       target: sbisim.callbacks.C2ST
 
-patience: 10
+patience: 20
 optimization:
   _file: configs/optimization/adam_reduce_lr.yaml
 
@@ -81,11 +81,13 @@ callbacks:
   scatter:
     target: sbisim.callbacks.corner_plot_posterior
     params:
-      save_every: 10
+      save_every: 30
       savedir: ${runtime.logdir}
       num_total_samples: 1_000
-  # scatter2:
-  #   target: sbisim.callbacks.true_predicted_plot
-  #   params:
-  #     save_every: 2
-  #     savedir: ${runtime.logdir}
+      observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  scatter2:
+    target: sbisim.callbacks.ranks
+    params:
+      save_every: 30
+      savedir: ${runtime.logdir}
+      observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]

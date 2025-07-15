@@ -246,32 +246,32 @@ if __name__ == "__main__":
     # num_observation_npy(path_stored, path_to_save, simulation_observation_index=10_000)
 
     # Create everything in one call
-    # summary = create_dataset(
-    #     path_stored, 
-    #     path_to_save, 
-    #     num_simulations=[200_000], 
-    #     num_observations=10, 
-    #     seed=42
-    # )
+    summary = create_dataset(
+        path_stored, 
+        path_to_save, 
+        num_simulations=[100_000, 1_000_000], 
+        num_observations=100, 
+        seed=42
+    )
     
-    # print("\nSummary:")
-    # print(f"Training datasets created: {list(summary['dataset_indices'].keys())}")
-    # print(f"Single observation index: {summary['single_observation_index']}")
-    # print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
-    # print(f"Total files used: {summary['total_files_used']}")
+    print("\nSummary:")
+    print(f"Training datasets created: {list(summary['dataset_indices'].keys())}")
+    print(f"Single observation index: {summary['single_observation_index']}")
+    print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
+    print(f"Total files used: {summary['total_files_used']}")
 
-    theta = np.load('/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo/theta_100000.npy')
-    fig = plt.figure()
-    for i in range(theta.shape[1]):
-        ax = fig.add_subplot(2, 2, i+1)
-        if i > 0:
-            ax.hist(10**theta[:, i])
-            print(f'Mean of parameter {i}: {jnp.mean(theta[:, i])}')
-            print(f'max of parameter {i}: {jnp.max(theta[:, i])}')
-        else:
-            ax.hist(theta[:, i])
+    # theta = np.load('/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo/theta_100000.npy')
+    # fig = plt.figure()
+    # for i in range(theta.shape[1]):
+    #     ax = fig.add_subplot(2, 2, i+1)
+    #     if i > 0:
+    #         ax.hist(10**theta[:, i])
+    #         print(f'Mean of parameter {i}: {jnp.mean(theta[:, i])}')
+    #         print(f'max of parameter {i}: {jnp.max(theta[:, i])}')
+    #     else:
+    #         ax.hist(theta[:, i])
         
-    fig.savefig('theta.png')
+    # fig.savefig('theta.png')
 
     # code_length = 10.0 * u.kpc
     # code_mass = 1e4 * u.Msun
