@@ -40,7 +40,7 @@ class OdisseoSimulator(SBISimulator):
     code_mass = 1e4 * u.Msun
     code_time = 3 * u.Gyr
     code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-    config_sim = SimulationConfig(N_particles = 1_000,
+    config_sim = SimulationConfig(N_particles = 1_00,
                             return_snapshots = False, 
                             num_timesteps = 1000, 
                             external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
@@ -91,9 +91,8 @@ class OdisseoSimulator(SBISimulator):
 
         return stream
     
-    def add_noise(x,rng, noise_std=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 1e-3])):
-        noise_std = noise_std.to(x.device)
-        x_noise = jax.random.multivariate_normal(mean=x, cov=noise_std, key=rng, shape=(x.shape[0]))
+    def add_noise(self, x,rng, noise_std=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 1e-3])):
+        x_noise = x + noise_std * random.normal(key=rng, shape=(x.shape))
         return x_noise
 
 
