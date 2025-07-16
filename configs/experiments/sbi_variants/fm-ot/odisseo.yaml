@@ -14,7 +14,7 @@ learning_rate: 0.001
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e5_dataset.yaml
+  _file: configs/datasets/benchmarks/10e4_dataset.yaml
   normalization : True
 
 strategy:

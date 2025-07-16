@@ -341,8 +341,8 @@ class GeneratorDataloader_numpy(Iterable):
         path = Path(DATA_ROOT)
         # path = path.joinpath(dataset)
 
-        if num_samples not in [1000, 10000, 100_000, 250_000, 1_000_000, 10000000]:
-            raise ValueError(f"num_samples ({num_samples}) must be in [1000, 10000, 100000, 250_000, 1000000]")
+        if num_samples not in [100, 1000, 10000, 100_000, 250_000, 1_000_000, 10000000]:
+            raise ValueError(f"num_samples ({num_samples}) must be in [100, 1000, 10000, 100000, 250_000, 1000000]")
 
         self.replacement = replacement
 

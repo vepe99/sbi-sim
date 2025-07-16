@@ -8,7 +8,7 @@ controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.8
-batch_size: 6
+batch_size: 50
 weighting: one
 loss_type: flow
 scaling_type: none
@@ -26,7 +26,7 @@ hidden_dims:
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e3_dataset.yaml
+  _file: configs/datasets/benchmarks/10e2_dataset.yaml
 strategy:
   target: sbisim.strategy.SimulatorFeedback
   params:
@@ -86,11 +86,11 @@ strategy:
         freeze: true
 
 training:
-  num_epochs: 4
+  num_epochs: 3
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 50
+    patience: 20
 
 # test:
 #   active: True
@@ -108,19 +108,19 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  scatter:
-    target: sbisim.callbacks.corner_plot_posterior
-    params:
-      save_every: 2
-      savedir: ${runtime.logdir}
-      num_total_samples: 5_000
-      observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      batch_size: ${batch_size}
+  # scatter:
+  #   target: sbisim.callbacks.corner_plot_posterior
+  #   params:
+  #     save_every: 2
+  #     savedir: ${runtime.logdir}
+  #     num_total_samples: 5_000
+  #     observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  #     batch_size: 1_000
   ranks:
     target: sbisim.callbacks.ranks
     params:
       save_every: 1
       savedir: ${runtime.logdir}
       num_total_samples: 1_000
-      observation_idx: 1000
-      batch_size: ${batch_size}
+      observation_idx: 2
+      batch_size: 55
