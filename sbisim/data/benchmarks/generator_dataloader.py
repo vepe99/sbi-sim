@@ -389,8 +389,6 @@ class GeneratorDataloader_numpy(Iterable):
         self.mean_y = self.y.mean(axis=0)
         self.std_y = self.y.std(axis=0)
 
-        print(f"mean_X: {self.mean_X}, std_X: {self.std_X}")
-
         if self.normalize:
             pass
             # print(f"Normalizing {self.dataset} data")
