@@ -7,6 +7,7 @@ from gc import callbacks
 from pathlib import Path
 from autocvd import autocvd
 autocvd(num_gpus = 1)
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1, 3, 5, 6'  
 
 import wandb
 from omegaconf import OmegaConf
@@ -159,7 +160,7 @@ def run(config):
 
         try:
 
-            for checkpoint_type in ['best_val', 'best_train']: #, 'latest'
+            for checkpoint_type in ['best_val',]: # 'best_train']: #, 'latest'
 
                 print(f"Testing {checkpoint_type} checkpoint...")
 
