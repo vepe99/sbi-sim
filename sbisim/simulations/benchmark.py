@@ -14,7 +14,7 @@ from jax import jit, random
 jax.config.update("jax_enable_x64", True)
 
 from odisseo import construct_initial_state
-from odisseo.dynamics import  DIRECT_ACC_MATRIX
+from odisseo.dynamics import  DIRECT_ACC_MATRIX, DIRECT_ACC_LAXMAP
 from odisseo.option_classes import SimulationConfig, SimulationParams, MNParams, NFWParams, PlummerParams, PSPParams, MN_POTENTIAL, NFW_POTENTIAL, PSP_POTENTIAL
 from odisseo.initial_condition import Plummer_sphere
 from odisseo.time_integration import time_integration
@@ -40,14 +40,6 @@ class OdisseoSimulator(SBISimulator):
     code_mass = 1e4 * u.Msun
     code_time = 3 * u.Gyr
     code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-    config_sim = SimulationConfig(N_particles = 1_00,
-                            return_snapshots = False, 
-                            num_timesteps = 1000, 
-                            external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
-                            acceleration_scheme = DIRECT_ACC_MATRIX,
-                            softening = (0.1 * u.pc).to(code_units.code_length).value,) #default values
-    #the center of mass needs to be integrated backwards in time first 
-    config_com = config_sim._replace(N_particles=1,)
 
     pos_com_final = jnp.array([[11.8, 0.79, 6.4]]) * u.kpc.to(code_units.code_length)
     vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(code_units.code_velocity)
@@ -96,7 +88,7 @@ class OdisseoSimulator(SBISimulator):
         return x_noise
 
 
-    def __init__(self, ):
+    def __init__(self, N_particles: int = 1000):
         super().__init__()
         self.low=jnp.array([ 0.5,
                             10**3., 
@@ -106,8 +98,17 @@ class OdisseoSimulator(SBISimulator):
                              10**4.5, 
                              10**log10(2 * 4.3683325e11),
                              10**log10(2 * 68_193_902_782.346756),])
+        self.N_particles = N_particles
+        self.config_sim = SimulationConfig(N_particles = self.N_particles,
+                            return_snapshots = False, 
+                            num_timesteps = 1000, 
+                            external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
+                            acceleration_scheme = DIRECT_ACC_MATRIX,
+                            softening = (0.1 * u.pc).to(self.code_units.code_length).value,) #default values
+        #the center of mass needs to be integrated backwards in time first 
+        self.config_com = self.config_sim._replace(N_particles=1,)
 
-        
+    @partial(jit, static_argnums=(0, 2, 4, 5)) 
     def __call__(self, params,  num_simulations, rng, 
                  normalize=True, deterministic=False, ):
             
