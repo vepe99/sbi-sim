@@ -64,7 +64,7 @@ strategy:
           params:
             sigma_min: 0.0001
     model_pretrained:
-      target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+      target: sbisim.flows.models.conv_2d_cross_noattention.Conv2DConditionModel
       params:
         import_samples: 10
         dim_flow: ${dim_flow}
@@ -98,7 +98,7 @@ strategy:
         freeze: true
 
 training:
-  num_epochs: 50
+  num_epochs: 200
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
@@ -131,8 +131,8 @@ callbacks:
   ranks:
     target: sbisim.callbacks.ranks
     params:
-      save_every: 1
+      save_every: 20
       savedir: ${runtime.logdir}
-      num_total_samples: 1_00
-      observation_idx: 100
-      batch_size: 6
+      num_total_samples: 1_000
+      observation_idx: 1_000
+      batch_size: ${batch_size}

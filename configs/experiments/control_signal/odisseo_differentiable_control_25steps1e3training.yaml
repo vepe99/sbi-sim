@@ -7,38 +7,35 @@ context_dim: 16
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.80
+start_time: 0.85
 batch_size: 6
 weighting: one
 loss_type: flow
 scaling_type: none
-learning_rate: 0.001
+learning_rate: 0.0005
 hidden_dims:
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-- 128
-
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e4_dataset.yaml
+  _file: configs/datasets/benchmarks/10e5_dataset.yaml
 strategy:
   target: sbisim.strategy.SimulatorFeedback
   params:
@@ -54,7 +51,7 @@ strategy:
     sampler:
       target: sbisim.strategy.improved_inference.FastCorrectorSampler
       params:
-        num_steps: 50
+        num_steps: 200
         start_time: ${start_time}
     schedule:
       target: sbisim.strategy.get_paths
@@ -78,6 +75,8 @@ strategy:
       params:
         simulator:
           target: sbisim.simulations.OdisseoSimulator
+          params:
+            N_particles: 1_000
         start_time: ${start_time}
 
         controlled_flow:
@@ -95,14 +94,14 @@ strategy:
             out_dim: ${aggregation_out_dim}
             in_dim: ${aggregation_in_dim}
             activation_fn: gelu
-        freeze: true
+        freeze: false
 
 training:
-  num_epochs: 50
+  num_epochs: 10
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 5
+    patience: 2
 
 # test:
 #   active: True
@@ -110,7 +109,7 @@ training:
 #     c2st:
 #       target: sbisim.callbacks.C2ST
 
-patience: 2
+patience: 3
 optimization:
   _file: configs/optimization/adam_reduce_lr.yaml
 
@@ -131,8 +130,8 @@ callbacks:
   ranks:
     target: sbisim.callbacks.ranks
     params:
-      save_every: 1
+      save_every: 20
       savedir: ${runtime.logdir}
-      num_total_samples: 1_00
-      observation_idx: 100
+      num_total_samples: 1_000
+      observation_idx: 200
       batch_size: 6

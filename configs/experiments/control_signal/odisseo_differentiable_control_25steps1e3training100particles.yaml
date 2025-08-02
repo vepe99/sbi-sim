@@ -7,7 +7,7 @@ context_dim: 16
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.80
+start_time: 0.85
 batch_size: 6
 weighting: one
 loss_type: flow
@@ -34,11 +34,26 @@ hidden_dims:
 - 128
 - 128
 - 128
-
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
+- 128
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e4_dataset.yaml
+  _file: configs/datasets/benchmarks/10e5_dataset.yaml
 strategy:
   target: sbisim.strategy.SimulatorFeedback
   params:
@@ -54,7 +69,7 @@ strategy:
     sampler:
       target: sbisim.strategy.improved_inference.FastCorrectorSampler
       params:
-        num_steps: 50
+        num_steps: 25
         start_time: ${start_time}
     schedule:
       target: sbisim.strategy.get_paths
@@ -78,6 +93,8 @@ strategy:
       params:
         simulator:
           target: sbisim.simulations.OdisseoSimulator
+          params:
+            N_particles: 1_00
         start_time: ${start_time}
 
         controlled_flow:
@@ -110,7 +127,7 @@ training:
 #     c2st:
 #       target: sbisim.callbacks.C2ST
 
-patience: 2
+patience: 10
 optimization:
   _file: configs/optimization/adam_reduce_lr.yaml
 
@@ -131,8 +148,8 @@ callbacks:
   ranks:
     target: sbisim.callbacks.ranks
     params:
-      save_every: 1
+      save_every: 20
       savedir: ${runtime.logdir}
-      num_total_samples: 1_00
-      observation_idx: 100
+      num_total_samples: 1_000
+      observation_idx: 1_000
       batch_size: 6

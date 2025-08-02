@@ -4,17 +4,17 @@ dim_flow: 4
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 512
+batch_size: 256
 
 weighting: 'one'
 loss_type: 'flow'
 scaling_type: 'none'
 
-learning_rate: 0.0005
+learning_rate: 0.001
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e6_dataset.yaml
+  _file: configs/datasets/benchmarks/10e5_dataset.yaml
   normalization : True
 
 strategy:
@@ -44,7 +44,7 @@ strategy:
             params:
               sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+      target: sbisim.flows.models.Unet_embedding.Conv2DConditionModel
       params:
         import_samples: 10
         dim_flow: ${dim_flow}
@@ -85,12 +85,12 @@ callbacks:
       savedir: ${runtime.logdir}
       num_total_samples: 5_000
       observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      batch_size: 2048
+      batch_size: ${batch_size}
   ranks:
     target: sbisim.callbacks.ranks
     params:
-      save_every: 1
+      save_every: 100
       savedir: ${runtime.logdir}
       num_total_samples: 1_000
-      observation_idx: 100
-      batch_size: 2048
+      observation_idx: 1_000
+      batch_size: ${batch_size}

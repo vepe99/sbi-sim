@@ -4,7 +4,7 @@ dim_flow: 4
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 512
+batch_size: 128
 
 weighting: 'one'
 loss_type: 'flow'
@@ -14,7 +14,7 @@ learning_rate: 0.0005
 
 data:
   target: sbisim.data.benchmarks.Odisseo
-  _file: configs/datasets/benchmarks/10e6_dataset.yaml
+  _file: configs/datasets/benchmarks/10e5_dataset.yaml
   normalization : True
 
 strategy:
@@ -44,7 +44,7 @@ strategy:
             params:
               sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.conv_2d_cross_attention.Conv2DConditionModel
+      target: sbisim.flows.models.conv_2d_cross_attention_FullAttention.Conv2DConditionModel
       params:
         import_samples: 10
         dim_flow: ${dim_flow}
@@ -56,7 +56,7 @@ strategy:
 
 
 training:
-  num_epochs: 200
+  num_epochs: 1
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
@@ -67,6 +67,17 @@ training:
 #   tests:
 #     c2st:
 #       target: sbisim.callbacks.C2ST
+test: 
+  active: True
+  tests:
+    ranks:
+        target: sbisim.callbacks.ranks
+        params:
+          savedir: ${runtime.logdir}
+          num_total_samples: 3_00
+          observation_idx: 1_000
+          batch_size: ${batch_size}
+
 
 patience: 5
 optimization:
@@ -78,19 +89,19 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  scatter:
-    target: sbisim.callbacks.corner_plot_posterior
-    params:
-      save_every: 1
-      savedir: ${runtime.logdir}
-      num_total_samples: 5_000
-      observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      batch_size: 2048
+  # scatter:
+  #   target: sbisim.callbacks.corner_plot_posterior
+  #   params:
+  #     save_every: 1
+  #     savedir: ${runtime.logdir}
+  #     num_total_samples: 5_000
+  #     observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  #     batch_size: ${batch_size}
   ranks:
     target: sbisim.callbacks.ranks
     params:
-      save_every: 1
+      save_every: 200
       savedir: ${runtime.logdir}
-      num_total_samples: 1_000
-      observation_idx: 100
-      batch_size: 2048
+      num_total_samples: 3_00
+      observation_idx: 1_000
+      batch_size: ${batch_size}

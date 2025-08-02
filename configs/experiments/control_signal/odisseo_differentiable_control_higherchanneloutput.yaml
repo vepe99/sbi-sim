@@ -70,7 +70,7 @@ strategy:
         dim_flow: ${dim_flow}
         sample_size:  64
         in_channels:  3
-        out_channels: 4
+        out_channels: 32
         dropout: 0.05
     weight_file_pretrained: ${weight_file_pretrained}
     model:
@@ -133,6 +133,6 @@ callbacks:
     params:
       save_every: 1
       savedir: ${runtime.logdir}
-      num_total_samples: 1_00
-      observation_idx: 100
+      num_total_samples: 1_000
+      observation_idx: 1000
       batch_size: 6
