@@ -116,13 +116,13 @@ class BenchmarkScatterPlot(Callback):
 class corner_plot_posterior(Callback):
 
     name: str = 'corner_plot_posterior'
-    save_every: int = 10
+    save_every: int = 0
 
     observation_idx: List[int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     num_total_samples: int = 1_000
     # batch_size: int = 1_000
 
-    def __init__(self, save_every: int = 10, savedir: str = None, num_total_samples: int = 1_000, observation_idx: List[int] = observation_idx, batch_size: int = 1_000):
+    def __init__(self, save_every: int = 0, savedir: str = None, num_total_samples: int = 1_000, observation_idx: List[int] = observation_idx, batch_size: int = 1_000):
         super().__init__()
         self.save_every = save_every
         self.savedir = savedir
@@ -324,17 +324,19 @@ class ranks(Callback):
 
         return logs, rng
 
+    def on_test(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+        return logs, rng
 
-    def on_train_end(self, *args, **kwargs):
-        return self.__call__(*args, init=True, **kwargs)
+    # def on_train_end(self, *args, **kwargs):
+    #     return self.__call__(*args, init=True, **kwargs)
 
-    def on_epoch_end(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+    # def on_epoch_end(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
 
-        if "epoch" in logs and logs["epoch"] % self.save_every == 0:
-            return self.__call__(logs, rng, *args, **kwargs)
-        else:
-            return logs, rng
- 
+    #     if "epoch" in logs and logs["epoch"] % self.save_every == 0:
+    #         return self.__call__(logs, rng, *args, **kwargs)
+    #     else:
+    #         return logs, rng
+    
 
 
     def _get_ranks(
