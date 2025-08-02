@@ -71,23 +71,20 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     import_samples: int = 5 # or whatever type this should be
     sample_size: int = 64
     dim_flow: int = 4
-    in_channels: int = 4
+    in_channels: int = 3
     out_channels: int = 4
-    #original
     down_block_types: Tuple[str, ...] = (
         "CrossAttnDownBlock2D", 
-        "DownBlock2D",
     )
     up_block_types: Tuple[str, ...] = (
-        "UpBlock2D",
         "CrossAttnUpBlock2D", 
         )
     only_cross_attention: Union[bool, Tuple[bool]] = False
-    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, )
-    layers_per_block: int = 6
+    block_out_channels: Tuple[int, ...] = (32,)
+    layers_per_block: int = 1
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
-    cross_attention_dim: int = 256
+    cross_attention_dim: int = 32
     dropout: float = 0.0
     use_linear_projection: bool = False
     dtype: jnp.dtype = jnp.float32
@@ -100,8 +97,8 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     addition_time_embed_dim: Optional[int] = None
     addition_embed_type_num_heads: int = 64
     projection_class_embeddings_input_dim: Optional[int] = None
-    mean_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e6.npz')['mean_x']
-    std_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e6.npz')['std_x']
+    mean_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_log_1e6.npz')['mean_x'].reshape(3, 1, 1)
+    std_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_log_1e6.npz')['std_x'].reshape(3, 1, 1)
 
     def init_weights(self, rng: jax.Array) -> FrozenDict:
         # init input tensors
@@ -109,13 +106,14 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         sample = jnp.zeros(sample_shape, dtype=jnp.float32)
         timesteps = jnp.ones((1,), dtype=jnp.int32)
         encoder_hidden_states = jnp.zeros((1, 1, self.cross_attention_dim), dtype=jnp.float32)
+        conditioning = encoder_hidden_states
 
         params_rng, dropout_rng = jax.random.split(rng)
         rngs = {"params": params_rng, "dropout": dropout_rng}
 
         added_cond_kwargs = None
 
-        return self.init(rngs, sample, timesteps, encoder_hidden_states, added_cond_kwargs)["params"]
+        return self.init(rngs, sample, timesteps, encoder_hidden_states, conditioning, added_cond_kwargs)["params"]
 
     def setup(self) -> None:
         block_out_channels = self.block_out_channels
@@ -247,7 +245,8 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         # # Normalize each histogram to sum to 1 (convert to probability distribution)
         # total = jnp.sum(histograms, axis=(1, 2), keepdims=True)
         # normalized_histograms = histograms / (total + 1e-8)  # Add epsilon to avoid division by zero
-        normalized_histograms = (histograms - self.mean_histogram) / (self.std_histogram + 1e-10)
+        histograms = jnp.log1p(histograms)  # Apply log1p for normalization
+        normalized_histograms = (histograms - self.mean_histogram) / (self.std_histogram)
         
         return normalized_histograms
     
@@ -256,11 +255,10 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             timesteps: Union[jnp.ndarray, float, int],
             sample: jnp.ndarray,
             encoder_hidden_states: jnp.ndarray,
-            added_cond_kwargs: Optional[Union[Dict, FrozenDict]] = None,
-            down_block_additional_residuals: Optional[Tuple[jnp.ndarray, ...]] = None,
-            mid_block_additional_residual: Optional[jnp.ndarray] = None,
-            return_dict: bool = True,
+            conditioning: Optional[jnp.ndarray] = None,
+            loss_grad = None,
             train: bool = False,
+            context =  None
     ) -> jnp.ndarray:
         r"""
         Args:
@@ -273,6 +271,8 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         Returns:
             jnp.ndarray
         """
+        encoder_hidden_states = conditioning if conditioning is not None else encoder_hidden_states
+
         # 1. time
         if not isinstance(timesteps, jnp.ndarray):
             timesteps = jnp.array([timesteps], dtype=jnp.int32)
@@ -284,12 +284,11 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         # print(encoder_hidden_states.shape)
         encoder_hidden_states = jax.vmap(self.histogram_set, in_axes=0)(encoder_hidden_states)
 
-        print("timesteps", timesteps.shape)
+
         timesteps = jnp.reshape(timesteps, -1)
 
         t_emb = self.time_proj(timesteps)
         t_emb = self.time_embedding(t_emb)
-        print("t_emb", t_emb.shape)
 
         # 1. swap sample (features) and encoder_hidden_states (conditioning for images)
         temp_ = sample
@@ -324,18 +323,22 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
 
         sample = jnp.reshape(sample, (sample.shape[0], -1))
 
+        if loss_grad is not None:
+            sample = nn.glu(jnp.concatenate(
+                [sample, loss_grad], axis=1), axis=1)
+
         out = self.dense_out(sample)
 
         return out
 
 def get_simple_cross_attention_conv2d(
-        sample_size: int = 160,
-        dim_flow: int = 3,
-        import_samples: int = 5, 
-        out_channels: int = 10,
+        sample_size: int = 64,
+        dim_flow: int = 4,
+        import_samples: int = 5,
+        out_channels: int = 4,
         in_channels: int = 4,
         dropout: float = 0.0,
-        layers_per_block: int = 1,
+        layers_per_block: int = 6,
 ):
     return Conv2DConditionModel(
         import_samples = import_samples,
@@ -343,12 +346,12 @@ def get_simple_cross_attention_conv2d(
         dim_flow=dim_flow,
         in_channels=in_channels,
         out_channels=out_channels,
-        down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D"),
-        up_block_types = ("CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D",),
+        down_block_types=("CrossAttnDownBlock2D", "DownBlock2D"),
+        up_block_types = ("UpBlock2D", "CrossAttnUpBlock2D", ),
         # block_out_channels=(64, 32, 64),
-        block_out_channels=(320, 640, 1280, 1280, 1280, 1280, 1280),
+        block_out_channels=(64, 64),
         layers_per_block=layers_per_block,
-        attention_head_dim=4,
+        attention_head_dim=1,
         num_attention_heads=None,
         cross_attention_dim=64,
         dropout=dropout,
@@ -367,13 +370,11 @@ class CrossAttentionCNF(ContinuousNormalizingFlow):
     import_samples: int = 5 # or whatever type this should be`
     dim_conditioning: int = 5  # Move this to the top
     sample_size: int = 32
-    dim_flow: int = 3
+    dim_flow: int = 4
     in_channels: int = 3
-    out_channels: int = 10
+    out_channels: int = 4
     dropout: float = 0.0
-    layers_per_block : int = 2,
-
-
+    layers_per_block : int = 6
 
     def setup(self):
 

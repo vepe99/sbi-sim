@@ -19,20 +19,38 @@ from diffusers.models.unets.unet_2d_blocks_flax import (
 )
 from ..cnf import ContinuousNormalizingFlow
 
+
+@flax.struct.dataclass
+class FlaxUNet2DConditionOutput(BaseOutput):
+    """
+    The output of [`FlaxUNet2DConditionModel`].
+
+    Args:
+        sample (`jnp.ndarray` of shape `(batch_size, num_channels, height, width)`):
+            The hidden states output conditioned on `encoder_hidden_states` input. Output of last layer of model.
+    """
+
+    sample: jnp.ndarray
+
+
 @flax_register_to_config
 class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     r"""
-    A conditional 2D convolutional model that takes a noisy sample, conditional state, and a timestep and returns a sample
+    A conditional 2D UNet model that takes a noisy sample, conditional state, and a timestep and returns a sample
     shaped output.
 
-    Implementation based on https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/unets/unet_2d_condition_flax.py
-
-    This model inherits from [`FlaxModelMixin`]. Check the superclass documentation for its generic methods
+    This model inherits from [`FlaxModelMixin`]. Check the superclass documentation for it's generic methods
     implemented for all models (such as downloading or saving).
 
     This model is also a Flax Linen [flax.linen.Module](https://flax.readthedocs.io/en/latest/flax.linen.html#module)
     subclass. Use it as a regular Flax Linen module and refer to the Flax documentation for all matters related to its
     general usage and behavior.
+
+    Inherent JAX features such as the following are supported:
+    - [Just-In-Time (JIT) compilation](https://jax.readthedocs.io/en/latest/jax.html#just-in-time-compilation-jit)
+    - [Automatic Differentiation](https://jax.readthedocs.io/en/latest/jax.html#automatic-differentiation)
+    - [Vectorization](https://jax.readthedocs.io/en/latest/jax.html#vectorization-vmap)
+    - [Parallelization](https://jax.readthedocs.io/en/latest/jax.html#parallelization-pmap)
 
     Parameters:
         sample_size (`int`, *optional*):
@@ -47,6 +65,9 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             The tuple of downsample blocks to use.
         up_block_types (`Tuple[str]`, *optional*, defaults to `("FlaxUpBlock2D", "FlaxCrossAttnUpBlock2D", "FlaxCrossAttnUpBlock2D", "FlaxCrossAttnUpBlock2D")`):
             The tuple of upsample blocks to use.
+        mid_block_type (`str`, *optional*, defaults to `"UNetMidBlock2DCrossAttn"`):
+            Block type for middle of UNet, it can be one of `UNetMidBlock2DCrossAttn`. If `None`, the mid block layer
+            is skipped.
         block_out_channels (`Tuple[int]`, *optional*, defaults to `(320, 640, 1280, 1280)`):
             The tuple of output channels for each block.
         layers_per_block (`int`, *optional*, defaults to 2):
@@ -63,28 +84,30 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             Whether to flip the sin to cos in the time embedding.
         freq_shift (`int`, *optional*, defaults to 0): The frequency shift to apply to the time embedding.
         use_memory_efficient_attention (`bool`, *optional*, defaults to `False`):
-            Enable memory efficient attention as described [here](https://arxiv.org/abs/2112.05682).
+            Enable memory efficient attention as described [here](https://huggingface.co/papers/2112.05682).
         split_head_dim (`bool`, *optional*, defaults to `False`):
             Whether to split the head dimension into a new axis for the self-attention computation. In most cases,
             enabling this flag should speed up the computation for Stable Diffusion 2.x and Stable Diffusion XL.
     """
-    import_samples: int = 5 # or whatever type this should be
+    import_samples: 10
     sample_size: int = 64
     dim_flow: int = 4
-    in_channels: int = 4
+    in_channels: int = 3
     out_channels: int = 4
-    #original
     down_block_types: Tuple[str, ...] = (
-        "CrossAttnDownBlock2D", 
-        "DownBlock2D",
+    "DownBlock2D",
+    "DownBlock2D",
+    "CrossAttnDownBlock2D",
     )
     up_block_types: Tuple[str, ...] = (
-        "UpBlock2D",
-        "CrossAttnUpBlock2D", 
-        )
+    "CrossAttnUpBlock2D",
+    "UpBlock2D",
+    "UpBlock2D",
+    )
+    mid_block_type: Optional[str] = "UNetMidBlock2DCrossAttn"
     only_cross_attention: Union[bool, Tuple[bool]] = False
-    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, )
-    layers_per_block: int = 6
+    block_out_channels: Tuple[int, ...] = (64, 128, 256)
+    layers_per_block: int = 4
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
     cross_attention_dim: int = 256
@@ -102,6 +125,7 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     projection_class_embeddings_input_dim: Optional[int] = None
     mean_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e6.npz')['mean_x']
     std_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e6.npz')['std_x']
+
 
     def init_weights(self, rng: jax.Array) -> FrozenDict:
         # init input tensors
@@ -214,18 +238,69 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         self.down_blocks = down_blocks
 
         # mid
-        self.mid_block = FlaxUNetMidBlock2DCrossAttn(
-            in_channels=block_out_channels[-1],
-            dropout=self.dropout,
-            num_attention_heads=num_attention_heads[-1],
-            transformer_layers_per_block=transformer_layers_per_block[-1],
-            use_linear_projection=self.use_linear_projection,
-            use_memory_efficient_attention=self.use_memory_efficient_attention,
-            split_head_dim=self.split_head_dim,
-            dtype=self.dtype,
-        )
+        if self.config.mid_block_type == "UNetMidBlock2DCrossAttn":
+            self.mid_block = FlaxUNetMidBlock2DCrossAttn(
+                in_channels=block_out_channels[-1],
+                dropout=self.dropout,
+                num_attention_heads=num_attention_heads[-1],
+                transformer_layers_per_block=transformer_layers_per_block[-1],
+                use_linear_projection=self.use_linear_projection,
+                use_memory_efficient_attention=self.use_memory_efficient_attention,
+                split_head_dim=self.split_head_dim,
+                dtype=self.dtype,
+            )
+        elif self.config.mid_block_type is None:
+            self.mid_block = None
+        else:
+            raise ValueError(f"Unexpected mid_block_type {self.config.mid_block_type}")
 
+        # dense out
         self.dense_out = nn.Dense(self.dim_flow, dtype=self.dtype)
+
+        # up
+        up_blocks = []
+        reversed_block_out_channels = list(reversed(block_out_channels))
+        reversed_num_attention_heads = list(reversed(num_attention_heads))
+        only_cross_attention = list(reversed(only_cross_attention))
+        output_channel = reversed_block_out_channels[0]
+        reversed_transformer_layers_per_block = list(reversed(transformer_layers_per_block))
+        for i, up_block_type in enumerate(self.up_block_types):
+            prev_output_channel = output_channel
+            output_channel = reversed_block_out_channels[i]
+            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+
+            is_final_block = i == len(block_out_channels) - 1
+
+            if up_block_type == "CrossAttnUpBlock2D":
+                up_block = FlaxCrossAttnUpBlock2D(
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    prev_output_channel=prev_output_channel,
+                    num_layers=self.layers_per_block + 1,
+                    transformer_layers_per_block=reversed_transformer_layers_per_block[i],
+                    num_attention_heads=reversed_num_attention_heads[i],
+                    add_upsample=not is_final_block,
+                    dropout=self.dropout,
+                    use_linear_projection=self.use_linear_projection,
+                    only_cross_attention=only_cross_attention[i],
+                    use_memory_efficient_attention=self.use_memory_efficient_attention,
+                    split_head_dim=self.split_head_dim,
+                    dtype=self.dtype,
+                )
+            else:
+                up_block = FlaxUpBlock2D(
+                    in_channels=input_channel,
+                    out_channels=output_channel,
+                    prev_output_channel=prev_output_channel,
+                    num_layers=self.layers_per_block + 1,
+                    add_upsample=not is_final_block,
+                    dropout=self.dropout,
+                    dtype=self.dtype,
+                )
+
+            up_blocks.append(up_block)
+            prev_output_channel = output_channel
+        self.up_blocks = up_blocks
 
         # out
         self.conv_norm_out = nn.GroupNorm(num_groups=32, epsilon=1e-5)
@@ -236,7 +311,7 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             padding=((1, 1), (1, 1)),
             dtype=self.dtype,
         )
-
+    
     def histogram_set(self, x):
         bins = [64, 32]
         ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins=bins, range=[[-120., 70.], [-8, 2]])
@@ -250,18 +325,18 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         normalized_histograms = (histograms - self.mean_histogram) / (self.std_histogram + 1e-10)
         
         return normalized_histograms
-    
+
     def __call__(
-            self,
-            timesteps: Union[jnp.ndarray, float, int],
-            sample: jnp.ndarray,
-            encoder_hidden_states: jnp.ndarray,
-            added_cond_kwargs: Optional[Union[Dict, FrozenDict]] = None,
-            down_block_additional_residuals: Optional[Tuple[jnp.ndarray, ...]] = None,
-            mid_block_additional_residual: Optional[jnp.ndarray] = None,
-            return_dict: bool = True,
-            train: bool = False,
-    ) -> jnp.ndarray:
+        self,
+        sample: jnp.ndarray,
+        timesteps: Union[jnp.ndarray, float, int],
+        encoder_hidden_states: jnp.ndarray,
+        added_cond_kwargs: Optional[Union[Dict, FrozenDict]] = None,
+        down_block_additional_residuals: Optional[Tuple[jnp.ndarray, ...]] = None,
+        mid_block_additional_residual: Optional[jnp.ndarray] = None,
+        return_dict: bool = True,
+        train: bool = False,
+    ) -> Union[FlaxUNet2DConditionOutput, Tuple[jnp.ndarray]]:
         r"""
         Args:
             timesteps (`jnp.ndarray` or `float` or `int`): timesteps
@@ -273,23 +348,26 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         Returns:
             jnp.ndarray
         """
+        print("timesteps", timesteps)
+        print("timesteps", timesteps.shape)
+        timesteps = timesteps[:, 0]
         # 1. time
         if not isinstance(timesteps, jnp.ndarray):
             timesteps = jnp.array([timesteps], dtype=jnp.int32)
         elif isinstance(timesteps, jnp.ndarray) and len(timesteps.shape) == 0:
             timesteps = timesteps.astype(dtype=jnp.float32)
             timesteps = jnp.expand_dims(timesteps, 0)
-
+        
         print("compiling.....")
         # print(encoder_hidden_states.shape)
         encoder_hidden_states = jax.vmap(self.histogram_set, in_axes=0)(encoder_hidden_states)
 
         print("timesteps", timesteps.shape)
         timesteps = jnp.reshape(timesteps, -1)
-
         t_emb = self.time_proj(timesteps)
         t_emb = self.time_embedding(t_emb)
         print("t_emb", t_emb.shape)
+
 
         # 1. swap sample (features) and encoder_hidden_states (conditioning for images)
         temp_ = sample
@@ -312,9 +390,38 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
                 sample, res_samples = down_block(sample, t_emb, deterministic=not train)
             down_block_res_samples += res_samples
 
-        # 4. mid
-        sample = self.mid_block(sample, t_emb, encoder_hidden_states, deterministic=not train)
+        if down_block_additional_residuals is not None:
+            new_down_block_res_samples = ()
 
+            for down_block_res_sample, down_block_additional_residual in zip(
+                down_block_res_samples, down_block_additional_residuals
+            ):
+                down_block_res_sample += down_block_additional_residual
+                new_down_block_res_samples += (down_block_res_sample,)
+
+            down_block_res_samples = new_down_block_res_samples
+
+        # 4. mid
+        if self.mid_block is not None:
+            sample = self.mid_block(sample, t_emb, encoder_hidden_states, deterministic=not train)
+
+        if mid_block_additional_residual is not None:
+            sample += mid_block_additional_residual
+
+        # 5. up
+        for up_block in self.up_blocks:
+            res_samples = down_block_res_samples[-(self.layers_per_block + 1) :]
+            down_block_res_samples = down_block_res_samples[: -(self.layers_per_block + 1)]
+            if isinstance(up_block, FlaxCrossAttnUpBlock2D):
+                sample = up_block(
+                    sample,
+                    temb=t_emb,
+                    encoder_hidden_states=encoder_hidden_states,
+                    res_hidden_states_tuple=res_samples,
+                    deterministic=not train,
+                )
+            else:
+                sample = up_block(sample, temb=t_emb, res_hidden_states_tuple=res_samples, deterministic=not train)
 
         # 6. post-process
         sample = self.conv_norm_out(sample)
@@ -327,168 +434,3 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         out = self.dense_out(sample)
 
         return out
-
-def get_simple_cross_attention_conv2d(
-        sample_size: int = 160,
-        dim_flow: int = 3,
-        import_samples: int = 5, 
-        out_channels: int = 10,
-        in_channels: int = 4,
-        dropout: float = 0.0,
-        layers_per_block: int = 1,
-):
-    return Conv2DConditionModel(
-        import_samples = import_samples,
-        sample_size=sample_size,
-        dim_flow=dim_flow,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        down_block_types=("DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D"),
-        up_block_types = ("CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D", "UpBlock2D",),
-        # block_out_channels=(64, 32, 64),
-        block_out_channels=(320, 640, 1280, 1280, 1280, 1280, 1280),
-        layers_per_block=layers_per_block,
-        attention_head_dim=4,
-        num_attention_heads=None,
-        cross_attention_dim=64,
-        dropout=dropout,
-        flip_sin_to_cos=True,
-        freq_shift=0,
-        use_memory_efficient_attention=False,
-        split_head_dim=False,
-        transformer_layers_per_block=1,
-        addition_embed_type=None,
-        addition_time_embed_dim=None,
-        addition_embed_type_num_heads=4,
-        projection_class_embeddings_input_dim=None
-    )
-
-class CrossAttentionCNF(ContinuousNormalizingFlow):
-    import_samples: int = 5 # or whatever type this should be`
-    dim_conditioning: int = 5  # Move this to the top
-    sample_size: int = 32
-    dim_flow: int = 3
-    in_channels: int = 3
-    out_channels: int = 10
-    dropout: float = 0.0
-    layers_per_block : int = 2,
-
-
-
-    def setup(self):
-
-        super().setup()
-
-        self.model = get_simple_cross_attention_conv2d(sample_size=self.sample_size, 
-                                                       dim_flow=self.dim_flow, 
-                                                       in_channels=self.in_channels, 
-                                                       out_channels=self.out_channels,
-                                                       dropout=self.dropout,
-                                                       layers_per_block=self.layers_per_block
-                                                       )
-        
-
-
-# import flax.linen as nn
-# import jax
-# import jax.numpy as jnp
-# from diffusers.models.embeddings_flax import FlaxTimestepEmbedding, FlaxTimesteps
-
-# class ConvBlock(nn.Module):
-#     """A block of two 3x3 convolutions with ReLU activations."""
-#     features: int
-    
-#     @nn.compact
-#     def __call__(self, x):
-#         x = nn.Conv(features=self.features, kernel_size=(3, 3), padding='SAME')(x)
-#         x = nn.relu(x)
-#         x = nn.Conv(features=self.features, kernel_size=(3, 3), padding='SAME')(x)
-#         x = nn.relu(x)
-#         return x
-
-# class UNet(nn.Module):
-#     """A U-Net model for inference in the continuous normalizing flow."""
-#     dim_flow: int = 3
-
-#     def histogram_set(self, x):
-#         """Converts input data to a set of 2D histograms."""
-#         bins = [64, 32]
-#         ph1_phi2, _, _ = jnp.histogram2d(x[:, 1], x[:, 2], bins=bins, range=[[-120., 70.], [-8, 2]])
-#         R_vR, _, _ = jnp.histogram2d(x[:, 0], x[:, 3], bins=bins, range=[[6., 20.], [-250., 250.]])
-#         vphicosphi2_vphi2, _, _ = jnp.histogram2d(x[:, 4], x[:, 5], bins=bins, range=[[-2., 1.], [-0.1, 0.1]])
-#         histograms = jnp.stack([ph1_phi2, R_vR, vphicosphi2_vphi2], axis=0)
-    
-#         # Normalize each histogram to sum to 1
-#         total = jnp.sum(histograms, axis=(1, 2), keepdims=True)
-#         normalized_histograms = histograms / (total + 1e-8) # Add epsilon to avoid division by zero
-        
-#         return normalized_histograms
-
-#     @nn.compact
-#     def __call__(self, t: jnp.ndarray, x: jnp.ndarray, conditioning: jnp.ndarray, params=None, rngs=None):
-#         """
-#         Defines the forward pass of the U-Net.
-
-#         Args:
-#             t: Timestep array.
-#             x: The flow variable being integrated by the ODE solver.
-#             conditioning: The conditioning data.
-
-#         Returns:
-#             The computed derivative for the ODE solver.
-#         """
-#         # 1. Convert conditioning data into a batch of images (histograms).
-#         # We use vmap to apply the histogram function over the batch dimension.
-#         cond_image = jax.vmap(self.histogram_set, in_axes=0)(conditioning)
-#         # Transpose from (N, C, H, W) to (N, H, W, C) for Flax Conv layers.
-#         cond_image = jnp.transpose(cond_image, (0, 2, 3, 1))
-
-#         # 2. Create embeddings for time `t` and flow variable `x`.
-#         t_emb = FlaxTimestepEmbedding(128)(FlaxTimesteps(64, flip_sin_to_cos=True, freq_shift=0)(t))
-#         x_emb = nn.Dense(features=128, name="x_embedding")(x)
-        
-#         # Combine embeddings into a single vector.
-#         emb = jnp.concatenate([t_emb, x_emb], axis=-1)
-#         emb = nn.Dense(features=512, name="combined_embedding")(emb)
-#         emb = nn.relu(emb)
-
-#         # 3. U-Net Architecture
-#         # Encoder Path
-#         conv1 = ConvBlock(features=64, name="encoder_conv1")(cond_image)
-#         pool1 = nn.max_pool(conv1, window_shape=(2, 2), strides=(2, 2))
-
-#         conv2 = ConvBlock(features=128, name="encoder_conv2")(pool1)
-#         pool2 = nn.max_pool(conv2, window_shape=(2, 2), strides=(2, 2))
-
-#         # Bottleneck
-#         bottleneck = ConvBlock(features=256, name="bottleneck_conv")(pool2)
-
-#         # Inject the combined time and x embedding into the bottleneck.
-#         emb_proj = nn.Dense(features=256, name="embedding_projection")(emb)
-#         bottleneck += emb_proj[:, None, None, :] # Broadcast across spatial dimensions
-
-#         # Decoder Path
-#         up1 = nn.ConvTranspose(features=128, kernel_size=(2, 2), strides=(2, 2), name="decoder_up1")(bottleneck)
-#         concat1 = jnp.concatenate([up1, conv2], axis=-1) # Skip connection
-#         deconv1 = ConvBlock(features=128, name="decoder_conv1")(concat1)
-
-#         up2 = nn.ConvTranspose(features=64, kernel_size=(2, 2), strides=(2, 2), name="decoder_up2")(deconv1)
-#         concat2 = jnp.concatenate([up2, conv1], axis=-1) # Skip connection
-#         deconv2 = ConvBlock(features=64, name="decoder_conv2")(concat2)
-
-#         # 4. Output Head
-#         # Global average pooling to reduce spatial dimensions to a feature vector.
-#         final_features = jnp.mean(deconv2, axis=(1, 2))
-        
-#         # Final dense layer to project to the desired output dimension.
-#         output = nn.Dense(features=self.dim_flow, name="output_dense")(final_features)
-
-#         return output
-    
-#     class UNetCNF(ContinuousNormalizingFlow):
-#         """A ContinuousNormalizingFlow that uses a U-Net for the dynamics function."""
-#         dim_flow: int = 4
-
-#         def setup(self):
-#             super().setup()
-#             self.model = UNet(dim_flow=self.dim_flow)

@@ -76,24 +76,32 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     #original
     down_block_types: Tuple[str, ...] = (
         "CrossAttnDownBlock2D", 
+        "CrossAttnDownBlock2D",
+        "CrossAttnDownBlock2D",
+        "DownBlock2D",
+        "DownBlock2D",
         "DownBlock2D",
     )
     up_block_types: Tuple[str, ...] = (
         "UpBlock2D",
+        "UpBlock2D",
+        "UpBlock2D",
         "CrossAttnUpBlock2D", 
+        "CrossAttnUpBlock2D", 
+        "CrossAttnUpBlock2D",
         )
     only_cross_attention: Union[bool, Tuple[bool]] = False
-    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, )
+    block_out_channels: Tuple[int, ...] = (64, 128, 256, 256, 512, 512)
     layers_per_block: int = 6
     attention_head_dim: Union[int, Tuple[int, ...]] = 8
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
-    cross_attention_dim: int = 256
+    cross_attention_dim: int = 1280
     dropout: float = 0.0
     use_linear_projection: bool = False
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_memory_efficient_attention: bool = True
+    use_memory_efficient_attention: bool = False
     split_head_dim: bool = False
     transformer_layers_per_block: Union[int, Tuple[int, ...]] = 1
     addition_embed_type: Optional[str] = None
@@ -256,11 +264,9 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
             timesteps: Union[jnp.ndarray, float, int],
             sample: jnp.ndarray,
             encoder_hidden_states: jnp.ndarray,
-            added_cond_kwargs: Optional[Union[Dict, FrozenDict]] = None,
-            down_block_additional_residuals: Optional[Tuple[jnp.ndarray, ...]] = None,
-            mid_block_additional_residual: Optional[jnp.ndarray] = None,
-            return_dict: bool = True,
+            loss_grad = None,
             train: bool = False,
+            context =  None
     ) -> jnp.ndarray:
         r"""
         Args:
@@ -284,12 +290,11 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         # print(encoder_hidden_states.shape)
         encoder_hidden_states = jax.vmap(self.histogram_set, in_axes=0)(encoder_hidden_states)
 
-        print("timesteps", timesteps.shape)
+
         timesteps = jnp.reshape(timesteps, -1)
 
         t_emb = self.time_proj(timesteps)
         t_emb = self.time_embedding(t_emb)
-        print("t_emb", t_emb.shape)
 
         # 1. swap sample (features) and encoder_hidden_states (conditioning for images)
         temp_ = sample
@@ -300,7 +305,7 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
 
 
         # 2. pre-process
-        sample = jnp.transpose(sample, (0, 2, 3, 1))
+        # sample = jnp.transpose(sample, (0, 2, 3, 1))
         sample = self.conv_in(sample)
 
         # 3. down
@@ -323,6 +328,10 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
         sample = jnp.transpose(sample, (0, 3, 1, 2))
 
         sample = jnp.reshape(sample, (sample.shape[0], -1))
+
+        if loss_grad is not None:
+            sample = nn.glu(jnp.concatenate(
+                [sample, loss_grad], axis=1), axis=1)
 
         out = self.dense_out(sample)
 
