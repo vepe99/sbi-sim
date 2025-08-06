@@ -8,7 +8,7 @@ controlled_flow_in_dim: 64
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.80
-batch_size: 14
+batch_size: 6
 weighting: one
 loss_type: flow
 scaling_type: none
@@ -112,12 +112,12 @@ test:
   active: True
   tests:
     ranks:
-        target: sbisim.callbacks.C2ST
+        target: sbisim.callbacks.C2ST100
         params:
           save_every: 200
           savedir: ${runtime.logdir}
           num_total_samples: 100
-          observation_idx: 2_50
+          observation_idx: 1_00
           batch_size: ${batch_size}
 
 patience: 5

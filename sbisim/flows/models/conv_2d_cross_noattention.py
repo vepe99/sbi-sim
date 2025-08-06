@@ -76,30 +76,32 @@ class Conv2DConditionModel(nn.Module, FlaxModelMixin, ConfigMixin):
     #original
     down_block_types: Tuple[str, ...] = (
         "DownBlock2D",
+        "DownBlock2D",
     )
     up_block_types: Tuple[str, ...] = (
         "UpBlock2D",
+        "UpBlock2D",
         )
     only_cross_attention: Union[bool, Tuple[bool]] = False
-    block_out_channels: Tuple[int, ...] = (64, 64, 64, 64, 64, 64)
-    layers_per_block: int = 6
-    attention_head_dim: Union[int, Tuple[int, ...]] = 8
+    block_out_channels: Tuple[int, ...] = (32, 64)
+    layers_per_block: int = 2
+    attention_head_dim: Union[int, Tuple[int, ...]] = 2
     num_attention_heads: Optional[Union[int, Tuple[int, ...]]] = None
-    cross_attention_dim: int = 256
+    cross_attention_dim: int = 64
     dropout: float = 0.0
     use_linear_projection: bool = False
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_memory_efficient_attention: bool = True
-    split_head_dim: bool = False
+    use_memory_efficient_attention: bool = False
+    split_head_dim: bool = True
     transformer_layers_per_block: Union[int, Tuple[int, ...]] = 1
     addition_embed_type: Optional[str] = None
     addition_time_embed_dim: Optional[int] = None
     addition_embed_type_num_heads: int = 64
     projection_class_embeddings_input_dim: Optional[int] = None
-    mean_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e6.npz')['mean_x']
-    std_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e6.npz')['std_x']
+    mean_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_log_1e6.npz')['mean_x'].reshape(3, 1, 1)
+    std_histogram = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_log_1e6.npz')['std_x'].reshape(3, 1, 1)
 
     def init_weights(self, rng: jax.Array) -> FrozenDict:
         # init input tensors

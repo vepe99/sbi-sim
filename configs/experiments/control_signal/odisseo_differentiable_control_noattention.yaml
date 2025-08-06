@@ -3,33 +3,23 @@ dim_flow: 4
 sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x32 
 dim_conditioning: 5
 dim_network: 4
-context_dim: 4
-controlled_flow_in_dim: 64
+context_dim: 16
+controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.80
+start_time: 0.90
 batch_size: 6
 weighting: one
 loss_type: flow
 scaling_type: none
-learning_rate: 0.0001
+learning_rate: 0.001
 hidden_dims:
 - 64
 - 64
 - 64
 - 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
-- 64
+
+
 
 data:
   target: sbisim.data.benchmarks.Odisseo
@@ -49,7 +39,7 @@ strategy:
     sampler:
       target: sbisim.strategy.improved_inference.FastCorrectorSampler
       params:
-        num_steps: 200
+        num_steps: 50
         start_time: ${start_time}
     schedule:
       target: sbisim.strategy.get_paths
@@ -59,7 +49,7 @@ strategy:
           params:
             sigma_min: 0.0001
     model_pretrained:
-      target: sbisim.flows.models.conv_2d_cross_attention_FullAttention.Conv2DConditionModel
+      target: sbisim.flows.models.conv_2d_cross_noattention.Conv2DConditionModel
       params:
         import_samples: 10
         dim_flow: ${dim_flow}
@@ -69,13 +59,10 @@ strategy:
         dropout: 0.05
     weight_file_pretrained: ${weight_file_pretrained}
     model:
-      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseo
+      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregation
       params:
-        sharding: False
         simulator:
           target: sbisim.simulations.OdisseoSimulator
-          params:
-            N_particles: 1_000
         start_time: ${start_time}
 
         controlled_flow:
@@ -96,17 +83,11 @@ strategy:
         freeze: true
 
 training:
-  num_epochs: 0
+  num_epochs: 20
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
     patience: 5
-
-# test:
-#   active: True
-#   tests:
-#     c2st:
-#       target: sbisim.callbacks.C2ST
 
 test: 
   active: True
@@ -117,10 +98,10 @@ test:
           save_every: 200
           savedir: ${runtime.logdir}
           num_total_samples: 100
-          observation_idx: 1_00
+          observation_idx: 2_00
           batch_size: ${batch_size}
 
-patience: 5
+patience: 2
 optimization:
   _file: configs/optimization/adam_reduce_lr.yaml
 
@@ -141,8 +122,8 @@ callbacks:
   # ranks:
   #   target: sbisim.callbacks.ranks
   #   params:
-  #     save_every: 100
+  #     save_every: 20
   #     savedir: ${runtime.logdir}
-  #     num_total_samples: 3_00
+  #     num_total_samples: 1_000
   #     observation_idx: 1_000
   #     batch_size: ${batch_size}

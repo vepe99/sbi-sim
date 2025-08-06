@@ -58,16 +58,22 @@ strategy:
 
 training:
   num_epochs: 200
-  num_steps_per_epoch: 2000
+  num_steps_per_epoch: 5000
   batch_size: ${batch_size}
   early_stopping:
     patience: 50
 
-# test:
-#   active: True
-#   tests:
-#     c2st:
-#       target: sbisim.callbacks.C2ST
+test: 
+  active: True
+  tests:
+    ranks:
+        target: sbisim.callbacks.C2ST
+        params:
+          save_every: 200
+          savedir: ${runtime.logdir}
+          num_total_samples: 100
+          observation_idx: 100
+          batch_size: ${batch_size}
 
 patience: 5
 optimization:
@@ -79,19 +85,19 @@ callbacks:
     params:
       savedir: ${runtime.logdir}
       key: val_loss
-  scatter:
-    target: sbisim.callbacks.corner_plot_posterior
-    params:
-      save_every: 1
-      savedir: ${runtime.logdir}
-      num_total_samples: 5_000
-      observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-      batch_size: ${batch_size}
-  ranks:
-    target: sbisim.callbacks.ranks
-    params:
-      save_every: 50
-      savedir: ${runtime.logdir}
-      num_total_samples: 1_000
-      observation_idx: 1_000
-      batch_size: ${batch_size}
+  # scatter:
+  #   target: sbisim.callbacks.corner_plot_posterior
+  #   params:
+  #     save_every: 1
+  #     savedir: ${runtime.logdir}
+  #     num_total_samples: 5_000
+  #     observation_idx: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  #     batch_size: ${batch_size}
+  # ranks:
+  #   target: sbisim.callbacks.ranks
+  #   params:
+  #     save_every: 50
+  #     savedir: ${runtime.logdir}
+  #     num_total_samples: 1_000
+  #     observation_idx: 1_000
+  #     batch_size: ${batch_size}
