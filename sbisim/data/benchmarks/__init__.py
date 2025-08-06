@@ -11,5 +11,6 @@ from .generator_dataloader import (
     SLCP,
     SLCPDistractors,
     TwoMoons,
-    Odisseo
+    Odisseo,
+    OdisseoAllParameters,
 )

@@ -1,6 +1,7 @@
 import os
 
-# import os
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'  # Set to the GPU you want to use, or '0' for the first GPU
 # os.environ['JAX_PLATFORM_NAME'] = 'cpu'
 
 # from autocvd import autocvd
@@ -16,36 +17,6 @@ import matplotlib.pyplot as plt
 from astropy import units as u
 from odisseo.units import CodeUnits
 
-# def convert_to_csv(path_stored, path_to_save, num_simulations=1000):
-#     print('start converting all the npz files to csv')
-#     all_data_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[:num_simulations] if f.endswith('.npz')]
-#     refence_path = [os.path.join(path_stored, f) for f in sorted(os.listdir(path_stored))[-1] if f.endswith('.npz')]
-#     x = []
-#     theta = []
-#     observation = []
-#     true_theta = []
-#     reference_posterior = []
-#     for file_path in tqdm(all_data_path):
-#         data = np.load(file_path)
-#         x.append(data['x'].flatten())
-#         theta.append(data['theta'][[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
-#         # Save as CSV with a single row (common for ML observations)
-#     df_x = pd.DataFrame(x)
-#     df_x.to_csv(os.path.join(path_to_save, f'x_{num_simulations}.csv'), index=False, header=False)
-#     df_theta = pd.DataFrame(theta)
-#     df_theta.to_csv(os.path.join(path_to_save, f'theta_{num_simulations}.csv'), index=False, header=False)
-#     for file_path in refence_path:
-#         observation.append(data['x'].flatten())
-#         true_theta.append(data['theta'])
-#         reference_posterior.append([])
-#     df_observation = pd.DataFrame(observation)
-#     df_observation.to_csv(os.path.join(path_to_save, f'observation.csv'), index=False, header=False)
-#     df_true_theta = pd.DataFrame(true_theta)
-#     df_true_theta.to_csv(os.path.join(path_to_save, f'true_parameters.csv'), index=False, header=False)
-#     df_reference_posterior = pd.DataFrame(reference_posterior)
-#     df_reference_posterior.to_csv(os.path.join(path_to_save, f'reference_posterior_samples.csv'), index=False, header=False)
-#     print(f'done converting all the npz files to csv in the folder {path_to_save}')
-
 
 def to_inference_parameters(theta, ):
         """
@@ -58,11 +29,11 @@ def to_inference_parameters(theta, ):
 
         theta[0] = theta[0] # t_end is already in Gyr
         theta[1] = np.log10(theta[1]).item() # Plummer mass is already in Msun
-        # theta[2] = theta[2] * code_units.code_length.to(u.kpc) # Plummer a
+        theta[2] = theta[2] * 10 # Plummer a
         theta[3] = np.log10(theta[3] * 1e4).item()  # NFW Mvir
-        # theta[4] = theta[4] * code_units.code_length.to(u.kpc)  # NFW r_s
+        theta[4] = theta[4] * 10 # NFW r_s
         theta[5] = np.log10(theta[5] * 1e4).item() # MN M
-        # theta[6] = theta[6] * code_units.code_length.to(u.kpc) # MN a
+        theta[6] = theta[6] * 10 # MN a
         return theta
 
 def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
@@ -77,9 +48,9 @@ def convert_to_single_npy(path_stored, path_to_save, num_simulations=1000):
     for file_path in tqdm(all_data_path):
         data = np.load(file_path)
         x.append(data['x'][:1000]) #histogram
-        theta.append(to_inference_parameters(data['theta'])[[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
+        theta.append(to_inference_parameters(data['theta'])) # we keep only the total integration time, the mass of Plummer, NFW and MN
     observation.append(data['x'][:1000])
-    true_theta.append(to_inference_parameters(data['theta'])[[0, 1, 3, 5]])
+    true_theta.append(to_inference_parameters(data['theta']))
     reference_posterior.append([])
     print('x shape:', np.array(x).shape)
     print('theta shape:', np.array(theta).shape)
@@ -108,7 +79,7 @@ def num_observation_npy(path_stored, path_to_save, simulation_observation_index=
             os.makedirs(path_to_save_num_observation)
         data = np.load(file_path)
         x.append(data['x'][:1000]) #histogram
-        theta.append(to_inference_parameters(data['theta'])[[0, 1, 3, 5]]) # we keep only the total integration time, the mass of Plummer, NFW and MN
+        theta.append(to_inference_parameters(data['theta'])) 
 
         np.save(os.path.join(path_to_save_num_observation, f'observation.npy'), x)
         np.save(os.path.join(path_to_save_num_observation, f'true_parameters.npy'), theta)
@@ -166,7 +137,7 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
         for file_path in tqdm(all_data_paths, desc=f"Processing {num_sims} files"):
             data = np.load(file_path)
             x.append(data['x'][:1000])  # histogram
-            theta.append(to_inference_parameters(data['theta'])[[0, 1, 3, 5]])  # selected parameters
+            theta.append(to_inference_parameters(data['theta']))  # selected parameters
         
         print(f'x shape: {np.array(x).shape}')
         print(f'theta shape: {np.array(theta).shape}')
@@ -184,7 +155,7 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
         data = np.load(os.path.join(path_stored, observation_file))
         
         observation = [data['x'][:1000]]
-        true_theta = [to_inference_parameters(data['theta'])[[0, 1, 3, 5]]]
+        true_theta = [to_inference_parameters(data['theta'])]
         reference_posterior = [[]]
         
         np.save(os.path.join(path_to_save, f'observation.npy'), observation)
@@ -212,7 +183,7 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
         # Load and process data
         data = np.load(file_path)
         x_single = [data['x'][:1000]]  # histogram - wrap in list for single observation
-        theta_single = [to_inference_parameters(data['theta'])[[0, 1, 3, 5]]]  # selected parameters
+        theta_single = [to_inference_parameters(data['theta'])]  # selected parameters
         reference_posterior = [[]]
         
         # Save individual observation files
@@ -222,7 +193,7 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
         
         # Accumulate for logging
         x_all.append(data['x'][:1000])
-        theta_all.append(to_inference_parameters(data['theta'])[[0, 1, 3, 5]])
+        theta_all.append(to_inference_parameters(data['theta']))
 
     print(f'Multiple observations - x shape: {np.array(x_all).shape}')
     print(f'Multiple observations - theta shape: {np.array(theta_all).shape}')
@@ -240,14 +211,14 @@ def create_dataset(path_stored, path_to_save, num_simulations=[10_000, 100_000],
 
 if __name__ == "__main__":
     path_stored = '/export/data/vgiusepp/odisseo_data/data_fix_position/'
-    path_to_save = '/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo/'
+    path_to_save = '/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo_AllParameters/'
  
     # Create everything in one call
     summary = create_dataset(
         path_stored, 
         path_to_save, 
         num_simulations=[10_000, 100_000, 1_000_000, 100], 
-        num_observations=100, 
+        num_observations=1000, 
         seed=42
     )
     
@@ -257,22 +228,4 @@ if __name__ == "__main__":
     print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
     print(f"Total files used: {summary['total_files_used']}")
 
-    # theta = np.load('/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo/theta_100000.npy')
-    # fig = plt.figure()
-    # for i in range(theta.shape[1]):
-    #     ax = fig.add_subplot(2, 2, i+1)
-    #     if i > 0:
-    #         ax.hist(10**theta[:, i])
-    #         print(f'Mean of parameter {i}: {jnp.mean(theta[:, i])}')
-    #         print(f'max of parameter {i}: {jnp.max(theta[:, i])}')
-    #     else:
-    #         ax.hist(theta[:, i])
-        
-    # fig.savefig('theta.png')
 
-    # code_length = 10.0 * u.kpc
-    # code_mass = 1e4 * u.Msun
-    # code_time = 3 * u.Gyr
-    # code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-    # print('unit length to kpc' , code_units.code_length.to(u.kpc))
-    # print('unit mass to Msun' , code_units.code_mass.to(u.Msun))

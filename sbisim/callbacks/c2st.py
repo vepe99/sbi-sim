@@ -97,8 +97,9 @@ class C2ST(Callback):
         print(f"Predicted theta shape: {predicted_theta_test_set.shape}")
         print(f'true_theta_test_set: {true_theta_test_set.shape}')
 
-
-        epoch = logs["epoch"]
+        # print(logs)
+        # epoch = logs["epoch"]
+        
 
         rank_plot = self._plot_ranks_histogram(
             samples=predicted_theta_test_set,
@@ -126,13 +127,122 @@ class C2ST(Callback):
         figure_list.append(prediction_plot)
 
         if self.savedir is not None:
-                rank_plot.savefig(f"{self.savedir}/pictures/ranks_histogram_{epoch}.png")
-                coverage_plot.savefig(f"{self.savedir}/pictures/coverage_plot_{epoch}.png")
-                prediction_plot.savefig(f"{self.savedir}/pictures/prediction_plot_{epoch}.png")
-                tarp_plot.savefig(f"{self.savedir}/pictures/tarp_plot_{epoch}.png")
+                rank_plot.savefig(f"{self.savedir}/pictures/ranks_histogram.pdf")
+                coverage_plot.savefig(f"{self.savedir}/pictures/coverage_plot.pdf")
+                prediction_plot.savefig(f"{self.savedir}/pictures/prediction_plot.pdf")
+                tarp_plot.savefig(f"{self.savedir}/pictures/tarp_plot.pdf")
 
         figure_list.append(fig)
+
+        np.savez(f"{self.savedir}/pictures/predicted_theta_test_set.npz",
+                 predicted_theta=predicted_theta_test_set,
+                 true_theta=true_theta_test_set)
+
+        logs['posteriors'] = [wandb.Image(fig) for fig in figure_list]
+
+        for fig in figure_list:
+            plt.close(fig)
+
+        return logs, rng
+    
+    def on_test(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+            return self.__call__(logs, rng, *args, **kwargs)
+    
+class C2ST100(Callback):
+
+    name: str = 'rankss'
+    save_every: int = 0
+
+    # observation_idx: List[int] = [i for i in range(1, observation_idx)]
+    num_total_samples: int = 1_000
+    # batch_size: int = 1_000
+
+    def __init__(self, save_every: int = 0, savedir: str = None, num_total_samples: int = 1_000, observation_idx: int = 10, batch_size: int = 1_000):
+        super().__init__()
+        self.save_every = save_every
+        self.savedir = savedir
+        self.num_total_samples = num_total_samples
+        self.low=jnp.array([ 0.5,
+                        10**3., 
+                        10**log10(1/4 * 4.3683325e11), 
+                        10**log10(1/4 * 68_193_902_782.346756), ])
+        self.high=jnp.array([5, 
+                        10**4.5, 
+                        10**log10(2 * 4.3683325e11),
+                        10**log10(2 * 68_193_902_782.346756),])
+        self.observation_idx = [i+100 for i in range(1, observation_idx)]
+        self.batch_size = batch_size
+        self.labels = ['$t_{end}$', '$M_{plummer}$', '$M_{NFW}$', '$M_{MN}$']
+        if self.savedir is not None:
+            os.makedirs(self.savedir + '/pictures', exist_ok=True)
+        
+    def __call__(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+        return self._call(logs, rng, *args, **kwargs)
+
+    def _call(self, logs: dict, rng: jr.PRNGKey, strategy: Strategy,
+              train_loader: GeneratorDataloader, val_loader: GeneratorDataloader, *args, **kwargs) \
+            -> Tuple[dict, jr.PRNGKey]:
+
+        
+        figure_list = []
+        fig, axes = plt.subplots(1, 4, figsize=(25, 5))  # Create figure and 4 axes once
+
+        true_theta_test_set = np.zeros((len(self.observation_idx), 4))
+        predicted_theta_test_set = np.zeros((self.num_total_samples, len(self.observation_idx), 4))
+
+        old_true_theta_test_set = np.load(f"{self.savedir}/pictures/predicted_theta_test_set.npz")['true_theta']
+        old_predicted_theta_test_set = np.load(f"{self.savedir}/pictures/predicted_theta_test_set.npz")['predicted_theta']
+
+        for id in self.observation_idx:
+
+            observation, true_theta, reference_posterior = train_loader.get_observation(id)
+            true_theta_test_set[id-1-100, :] = true_theta[0, :]
+
+            observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
+            posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
+                                                   batch_size=self.batch_size)
+            posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
+            predicted_theta_test_set[:, id-1-100, :] = posterior_samples['samples']
+
+            old_true_theta_test_set = np.concatenate([old_true_theta_test_set, true_theta[0, :].reshape(1, 4)], axis=0)
+            old_predicted_theta_test_set = np.concatenate([old_predicted_theta_test_set, posterior_samples['samples'].reshape(self.num_total_samples, 1, 4)], axis=1)
+
+            rank_plot = self._plot_ranks_histogram(
+                samples=old_predicted_theta_test_set,
+                trues=old_true_theta_test_set,
+                nbins=10)
             
+            coverage_plot = self._plot_coverage(
+                samples=old_predicted_theta_test_set,
+                trues=old_true_theta_test_set,
+                plotscatter=True,
+            )
+
+            prediction_plot = self._plot_predictions(
+                samples=old_predicted_theta_test_set,
+                trues=old_true_theta_test_set,
+            )
+
+            tarp_plot = self._plot_TARP(
+                posterior_samples=old_predicted_theta_test_set,
+                theta=old_true_theta_test_set,
+            )
+            
+            figure_list.append(rank_plot)
+            figure_list.append(coverage_plot)
+            figure_list.append(prediction_plot)
+
+            if self.savedir is not None:
+                    rank_plot.savefig(f"{self.savedir}/pictures/ranks_histogram_{id}.pdf")
+                    coverage_plot.savefig(f"{self.savedir}/pictures/coverage_plot_{id}.pdf")
+                    prediction_plot.savefig(f"{self.savedir}/pictures/prediction_plot_{id}.pdf")
+                    tarp_plot.savefig(f"{self.savedir}/pictures/tarp_plot_{id}.pdf")
+
+            figure_list.append(fig)
+
+        np.savez(f"{self.savedir}/pictures/predicted_theta_test_set_100.npz",
+                 predicted_theta=predicted_theta_test_set,
+                 true_theta=true_theta_test_set)
 
         logs['posteriors'] = [wandb.Image(fig) for fig in figure_list]
 
@@ -144,17 +254,7 @@ class C2ST(Callback):
     def on_test(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
             return self.__call__(logs, rng, *args, **kwargs)
 
-    # def on_train_end(self, *args, **kwargs):
-    #     return self.__call__(*args, init=True, **kwargs)
-
-    # def on_epoch_end(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
-
-    #     if "epoch" in logs and logs["epoch"] % self.save_every == 0:
-    #         return self.__call__(logs, rng, *args, **kwargs)
-    #     else:
-    #         return logs, rng
     
-
 
     def _get_ranks(
             self,
@@ -354,6 +454,121 @@ class C2ST(Callback):
         ax.set_xlabel("Credibility Level")
 
         return fig
+    
+
+class C2STAllParameters(Callback):
+
+    name: str = 'rankss'
+    save_every: int = 0
+
+    # observation_idx: List[int] = [i for i in range(1, observation_idx)]
+    num_total_samples: int = 1_000
+    # batch_size: int = 1_000
+
+    def __init__(self, save_every: int = 0, savedir: str = None, num_total_samples: int = 1_000, observation_idx: int = 10, batch_size: int = 1_000):
+        super().__init__()
+        self.save_every = save_every
+        self.savedir = savedir
+        self.num_total_samples = num_total_samples
+        self.low=jnp.array([0.5,
+                            10**3., 
+                            1/4 * 8,
+                            10**log10(1/4 * 4.3683325e11), 
+                            1/4 * 16,
+                            10**log10(1/4 *68_193_902_782.346756),
+                             1/4 * 3,
+                              ])
+        self.high=jnp.array([5, 
+                             10**4.5, 
+                             2 * 8, 
+                             10**log10(2 * 4.3683325e11),
+                             2 * 16,
+                             10**log10(2 * 68_193_902_782.346756),
+                             2 * 3,
+                             ])
+        self.observation_idx = [i for i in range(1, observation_idx)]
+        self.batch_size = batch_size
+        self.labels = ['$t_{end}$', '$M_{plummer}$', '$a_{plummer}$', '$M_{NFW}$', '$M_{MN}$']
+        if self.savedir is not None:
+            os.makedirs(self.savedir + '/pictures', exist_ok=True)
+        
+    def __call__(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+        return self._call(logs, rng, *args, **kwargs)
+
+    def _call(self, logs: dict, rng: jr.PRNGKey, strategy: Strategy,
+              train_loader: GeneratorDataloader, val_loader: GeneratorDataloader, *args, **kwargs) \
+            -> Tuple[dict, jr.PRNGKey]:
+
+        
+        figure_list = []
+        fig, axes = plt.subplots(1, 4, figsize=(25, 5))  # Create figure and 4 axes once
+
+        true_theta_test_set = np.zeros((len(self.observation_idx), 4))
+        predicted_theta_test_set = np.zeros((self.num_total_samples, len(self.observation_idx), 4))
+
+        for id in self.observation_idx:
+
+            observation, true_theta, reference_posterior = train_loader.get_observation(id)
+            true_theta_test_set[id-1, :] = true_theta[0, :]
+
+            observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
+            posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
+                                                   batch_size=self.batch_size)
+            posterior_samples['samples'] = 0.5 * (posterior_samples['samples'] + 1) * (self.high-self.low) + self.low
+            predicted_theta_test_set[:, id-1, :] = posterior_samples['samples']
+        print(f"Predicted theta shape: {predicted_theta_test_set.shape}")
+        print(f'true_theta_test_set: {true_theta_test_set.shape}')
+
+        # print(logs)
+        # epoch = logs["epoch"]
+        
+
+        rank_plot = self._plot_ranks_histogram(
+            samples=predicted_theta_test_set,
+            trues=true_theta_test_set,
+            nbins=10)
+        
+        coverage_plot = self._plot_coverage(
+            samples=predicted_theta_test_set,
+            trues=true_theta_test_set,
+            plotscatter=True,
+        )
+
+        prediction_plot = self._plot_predictions(
+            samples=predicted_theta_test_set,
+            trues=true_theta_test_set,
+        )
+
+        tarp_plot = self._plot_TARP(
+            posterior_samples=predicted_theta_test_set,
+            theta=true_theta_test_set,
+        )
+        
+        figure_list.append(rank_plot)
+        figure_list.append(coverage_plot)
+        figure_list.append(prediction_plot)
+
+        if self.savedir is not None:
+                rank_plot.savefig(f"{self.savedir}/pictures/ranks_histogram.pdf")
+                coverage_plot.savefig(f"{self.savedir}/pictures/coverage_plot.pdf")
+                prediction_plot.savefig(f"{self.savedir}/pictures/prediction_plot.pdf")
+                tarp_plot.savefig(f"{self.savedir}/pictures/tarp_plot.pdf")
+
+        figure_list.append(fig)
+
+        np.savez(f"{self.savedir}/pictures/predicted_theta_test_set.npz",
+                 predicted_theta=predicted_theta_test_set,
+                 true_theta=true_theta_test_set)
+
+        logs['posteriors'] = [wandb.Image(fig) for fig in figure_list]
+
+        for fig in figure_list:
+            plt.close(fig)
+
+        return logs, rng
+    
+    def on_test(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+            return self.__call__(logs, rng, *args, **kwargs)
     
 # class C2ST(Callback):
 

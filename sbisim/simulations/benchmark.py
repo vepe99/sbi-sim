@@ -139,6 +139,123 @@ class OdisseoSimulator(SBISimulator):
         samples = samples_y
         return samples, rng
 
+class OdisseoSimulatoAllParameters(SBISimulator):
+
+    mean_X = jnp.array([ 2.74624777,  4.11436082, 11.64272994, 10.83071852])
+    std_X = jnp.array([1.293599, 0.33540717, 0.23241504, 0.23697831])
+
+    code_length = 10.0 * u.kpc
+    code_mass = 1e4 * u.Msun
+    code_time = 3 * u.Gyr
+    code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+
+    pos_com_final = jnp.array([[11.8, 0.79, 6.4]]) * u.kpc.to(code_units.code_length)
+    vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(code_units.code_velocity)
+
+    def run_simulation(self, rng_key, params):
+        params_samples = SimulationParams(t_end = params[0],
+                        Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time),
+                                                       a = params[2] * u.kpc.to(self.code_units.code_length),),
+                        NFW_params = NFWParams(Mvir=params[3] * u.Msun.to(self.code_units.code_mass),
+                                               r_s= (params[4] * u.kpc).to(self.code_units.code_length).value,),
+                        MN_params = MNParams(M = params[5] * u.Msun.to(self.code_units.code_mass),
+                                             a = (params[6] * u.kpc).to(self.code_units.code_length).value,
+                                            b = (0.280 * u.kpc).to(self.code_units.code_length).value),
+                        PSP_params= PSPParams(M = 4501365375.06545 * u.Msun.to(self.code_units.code_mass),
+                                                alpha = 1.8, 
+                                                r_c = (1.9*u.kpc).to(self.code_units.code_length).value),  
+                        G = self.code_units.G, )
+
+        params_com = params_samples._replace(t_end=-params_samples.t_end,)
+        mass_com = jnp.array([params_samples.Plummer_params.Mtot]) 
+        
+        #we construmt the initial state of the com 
+        initial_state_com = construct_initial_state(self.pos_com_final, self.vel_com_final,)
+        #we run the simulation backwards in time for the center of mass
+        final_state_com = time_integration(initial_state_com, mass_com, config=self.config_com, params=params_com)
+        #we calculate the final position and velocity of the center of mass
+        pos_com = final_state_com[:, 0]
+        vel_com = final_state_com[:, 1]
+
+        #we construct the initial state of the Plummer sphere
+        positions, velocities, mass = Plummer_sphere(key=rng_key, params=params_samples, config=self.config_sim)
+        #we add the center of mass position and velocity to the Plummer sphere particles
+        positions = positions + pos_com
+        velocities = velocities + vel_com
+        #initialize the initial state
+        initial_state_stream = construct_initial_state(positions, velocities, )
+        #run the simulation
+        final_state = time_integration(initial_state_stream, mass, config=self.config_sim, params=params_samples)
+
+        #projection on the GD1 stream
+        stream = projection_on_GD1(final_state, code_units=self.code_units,)
+
+        return stream
+    
+    def add_noise(self, x,rng, noise_std=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 1e-3])):
+        x_noise = x + noise_std * random.normal(key=rng, shape=(x.shape))
+        return x_noise
+
+
+    def __init__(self, N_particles: int = 1000):
+        super().__init__()
+        self.low=jnp.array([0.5,
+                            10**3., 
+                            1/4 * 8,
+                            10**log10(1/4 * 4.3683325e11), 
+                            1/4 * 16,
+                            10**log10(1/4 *68_193_902_782.346756),
+                             1/4 * 3,
+                              ])
+        self.high=jnp.array([5, 
+                             10**4.5, 
+                             2 * 8, 
+                             10**log10(2 * 4.3683325e11),
+                             2 * 16,
+                             10**log10(2 * 68_193_902_782.346756),
+                             2 * 3,
+                             ])
+        self.N_particles = N_particles
+        self.config_sim = SimulationConfig(N_particles = self.N_particles,
+                            return_snapshots = False, 
+                            num_timesteps = 1000, 
+                            external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
+                            acceleration_scheme = DIRECT_ACC_MATRIX,
+                            softening = (0.1 * u.pc).to(self.code_units.code_length).value,) #default values
+        #the center of mass needs to be integrated backwards in time first 
+        self.config_com = self.config_sim._replace(N_particles=1,)
+
+    @partial(jit, static_argnums=(0, 2, 4, 5)) 
+    def __call__(self, params,  num_simulations, rng, 
+                 normalize=True, deterministic=False, ):
+            
+        if normalize:
+            #not sure about this
+            params = 0.5 * (params + 1) * (self.high-self.low) + self.low
+
+        batch_size = params.shape[0]
+
+        X = params
+        Y = self.run_simulation(rng, params)
+        # Y = jnp.repeat(Y, batch_size)
+        if deterministic:
+            pass
+        else:
+            Y =  self.add_noise(x=Y, rng=rng)
+
+        
+        # X = jnp.repeat(X[:, None], num_simulations, axis=1)
+        # Y = jnp.repeat(Y[:, None], num_simulations, axis=1 )
+
+        samples_x = X
+        samples_y = Y
+
+        # samples = jnp.stack([samples_x, samples_y.reshape(samples_x.shape)], axis=1)
+        # samples = samples.reshape(batch_size, -1)
+        # samples = samples_y.reshape(batch_size, -1)
+        samples = samples_y
+        return samples, rng
+
 
 class LotkaVolterraSimulator(SBISimulator):
 
