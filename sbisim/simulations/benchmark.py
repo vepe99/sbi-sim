@@ -139,7 +139,7 @@ class OdisseoSimulator(SBISimulator):
         samples = samples_y
         return samples, rng
 
-class OdisseoSimulatoAllParameters(SBISimulator):
+class OdisseoSimulatorAllParameters(SBISimulator):
 
     mean_X = jnp.array([ 2.74624777,  4.11436082, 11.64272994, 10.83071852])
     std_X = jnp.array([1.293599, 0.33540717, 0.23241504, 0.23697831])
@@ -157,9 +157,9 @@ class OdisseoSimulatoAllParameters(SBISimulator):
                         Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time),
                                                        a = params[2] * u.kpc.to(self.code_units.code_length),),
                         NFW_params = NFWParams(Mvir=params[3] * u.Msun.to(self.code_units.code_mass),
-                                               r_s= (params[4] * u.kpc).to(self.code_units.code_length).value,),
+                                               r_s= params[4] * u.kpc.to(self.code_units.code_length)),
                         MN_params = MNParams(M = params[5] * u.Msun.to(self.code_units.code_mass),
-                                             a = (params[6] * u.kpc).to(self.code_units.code_length).value,
+                                             a = params[6] * u.kpc.to(self.code_units.code_length),
                                             b = (0.280 * u.kpc).to(self.code_units.code_length).value),
                         PSP_params= PSPParams(M = 4501365375.06545 * u.Msun.to(self.code_units.code_mass),
                                                 alpha = 1.8, 
@@ -201,7 +201,7 @@ class OdisseoSimulatoAllParameters(SBISimulator):
         super().__init__()
         self.low=jnp.array([0.5,
                             10**3., 
-                            1/4 * 8,
+                            1/4 * 0.008,
                             10**log10(1/4 * 4.3683325e11), 
                             1/4 * 16,
                             10**log10(1/4 *68_193_902_782.346756),
@@ -209,7 +209,7 @@ class OdisseoSimulatoAllParameters(SBISimulator):
                               ])
         self.high=jnp.array([5, 
                              10**4.5, 
-                             2 * 8, 
+                             2 * 0.008, 
                              10**log10(2 * 4.3683325e11),
                              2 * 16,
                              10**log10(2 * 68_193_902_782.346756),

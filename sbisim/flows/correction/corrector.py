@@ -330,6 +330,77 @@ class CorrectorDifferentiableSimulatorOdisseo(nn.Module):
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
 
         return drift, output
+    
+
+class CorrectorDifferentiableSimulatorOdisseoNewLoss(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=False, )  # noqa
+
+        return -1 * stream_likelihood(model_stream=output, obs_stream=target, obs_errors=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 0.00001]))
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        loss, grad = grad_fn(theta_1, context)
+        
+
+        loss = jnp.expand_dims(loss, axis=1)
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+        output = jnp.concatenate([flow_pred, t, output], axis=1)
+        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention 
+
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output
 
 class CorrectorDifferentiableSimulatorOdisseoAggregation(nn.Module):
     """
@@ -438,3 +509,55 @@ def percintile_based_mmd(sim_norm, target_norm, scale_weights = jnp.array([0.25,
     
     mmd = jnp.sum(scale_weights * jax.vmap(lambda sigmas: compute_mmd(sim_norm, target_norm, sigmas))(sigmas))/len(sigmas)
     return mmd 
+
+
+def log_diag_multivariate_normal(x, mean, sigma):
+        """
+        Log PDF of a multivariate Gaussian with diagonal covariance.
+        
+        Parameters
+        ----------
+        x : (D,)
+        mean : (D,)
+        sigma : (D,)  # standard deviations for each dimension
+        """
+        diff = (x - mean) / sigma
+        D = x.shape[0]
+        log_det = 2.0 * jnp.sum(jnp.log(sigma))
+        norm_const = -0.5 * (D * jnp.log(2 * jnp.pi) + log_det)
+        exponent = -0.5 * jnp.sum(diff**2)
+        return norm_const + exponent
+
+def stream_likelihood(model_stream, obs_stream, obs_errors, ):
+    """
+    Log-likelihood of observed stars given simulated stream (diagonal covariance).
+    
+    Parameters
+    ----------
+    model_stream : (N_model, D)
+    obs_stream : (N_obs, D)
+    obs_errors : (N_obs, D)   # per-dimension standard deviations
+    tau : float
+        Stream membership fraction
+    p_field : float
+        Background probability density
+    """
+    def obs_log_prob(obs, sigma):
+        def model_log_prob(model_point):
+            return log_diag_multivariate_normal(obs, model_point, sigma)
+
+        # Compute log_probs for all model points
+        log_probs = jax.vmap(model_log_prob)(model_stream)
+        
+        # Numerically stable average: log(mean(exp(log_probs)))
+        log_p_stream = jax.scipy.special.logsumexp(log_probs) - jnp.log(model_stream.shape[0])
+        
+        # Mixture model
+        # p_total = tau * jnp.exp(log_p_stream) + (1 - tau) * p_field
+        p_total = jnp.exp(log_p_stream)
+        return jnp.log(p_total + 1e-30)
+
+    # Vectorize over observations
+    logL_values = jax.vmap(obs_log_prob)(obs_stream, jnp.repeat(obs_errors, obs_stream.shape[0]).reshape(-1, 6))
+    return jnp.sum(logL_values)
+
