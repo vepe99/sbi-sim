@@ -1,19 +1,29 @@
+#REMEMBER TO USE CODA_VISIBILE_DEVICES=3
 name: Odisseo_0_gradient_signal
-dim_flow: 4
+dim_flow: 7
 sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x32 
 dim_conditioning: 5
-dim_network: 4
-context_dim: 16
+dim_network: 7
+context_dim: 128
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.90
-batch_size: 6tmux
+start_time: 0.80
+batch_size: 6
 weighting: one
-loss_type: flow
+loss_type: fm_ot
 scaling_type: none
-learning_rate: 0.001
+learning_rate: 0.0001
 hidden_dims:
+- 256
+- 256
+- 256
+- 256
+- 256
+- 128
+- 128
+- 128
+- 128
 - 64
 - 64
 - 64
@@ -22,7 +32,7 @@ hidden_dims:
 
 
 data:
-  target: sbisim.data.benchmarks.Odisseo
+  target: sbisim.data.benchmarks.OdisseoOTAllParameters
   _file: configs/datasets/benchmarks/10e5_dataset.yaml
 strategy:
   target: sbisim.strategy.SimulatorFeedback
@@ -35,7 +45,10 @@ strategy:
     start_time: ${start_time}
     time_alpha: 0.0
     prior:
-      target: sbisim.strategy.distributions.get_odisseo_prior
+      target: sbisim.strategy.distributions.get_normal_gaussian_prior
+      params:
+        shape:
+         - ${dim_flow}
     sampler:
       target: sbisim.strategy.improved_inference.FastCorrectorSampler
       params:
@@ -55,14 +68,14 @@ strategy:
         dim_flow: ${dim_flow}
         sample_size:  64
         in_channels:  3
-        out_channels: 4
+        out_channels: 7
         dropout: 0.05
     weight_file_pretrained: ${weight_file_pretrained}
     model:
-      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregation
+      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregationNewLoss
       params:
         simulator:
-          target: sbisim.simulations.OdisseoSimulator
+          target: sbisim.simulations.OdisseoSimulatorOT_AllParameters
         start_time: ${start_time}
 
         controlled_flow:
@@ -83,7 +96,7 @@ strategy:
         freeze: true
 
 training:
-  num_epochs: 5
+  num_epochs: 10
   num_steps_per_epoch: 3000
   batch_size: ${batch_size}
   early_stopping:
@@ -93,12 +106,18 @@ test:
   active: True
   tests:
     ranks:
-        target: sbisim.callbacks.C2ST
+        target: sbisim.callbacks.C2ST_OT_AllParameters
         params:
           save_every: 200
           savedir: ${runtime.logdir}
-          num_total_samples: 200
-          observation_idx: 1_00
+          num_total_samples: 100
+          observation_idx: 200
+          batch_size: ${batch_size}
+    true_sampling:
+        target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
+        params:
+          savedir: ${runtime.logdir}
+          num_total_samples: 5000
           batch_size: ${batch_size}
 
 patience: 2

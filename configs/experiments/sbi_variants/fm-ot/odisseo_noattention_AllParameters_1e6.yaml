@@ -15,7 +15,7 @@ learning_rate: 0.0005
 
 data:
   target: sbisim.data.benchmarks.OdisseoAllParameters
-  _file: configs/datasets/benchmarks/10e5_dataset.yaml
+  _file: configs/datasets/benchmarks/10e6_dataset.yaml
   normalization : True
 
 strategy:
@@ -61,7 +61,7 @@ training:
   num_steps_per_epoch: 5000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 50
+    patience: 10
 
 test: 
   active: True

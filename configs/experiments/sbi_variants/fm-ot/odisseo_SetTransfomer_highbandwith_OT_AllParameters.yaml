@@ -5,16 +5,16 @@ dim_flow: 7
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 256
+batch_size: 100
 
 weighting: 'one'
-loss_type: 'flow'
+loss_type: 'fm_ot'
 scaling_type: 'none'
 
 learning_rate: 0.0005
 
 data:
-  target: sbisim.data.benchmarks.OdisseoAllParameters
+  target: sbisim.data.benchmarks.OdisseoOTAllParameters
   _file: configs/datasets/benchmarks/10e5_dataset.yaml
   normalization : True
 
@@ -27,14 +27,20 @@ strategy:
     loss_type: ${loss_type}
     scaling_type: ${scaling_type}
     time_alpha: 1
-    bandwidth: 0.01
+    bandwidth: 0.5
     prior:
-      target: sbisim.strategy.distributions.get_odisseo_prior_AllParameters
+      target: sbisim.strategy.distributions.get_normal_gaussian_prior
+      params:
+        shape:
+         - ${dim_flow}
     sampler:
       target: sbisim.strategy.improved_inference.PriorODESolver
       params:
         prior:
-          target: sbisim.strategy.distributions.get_odisseo_prior_AllParameters
+          target: sbisim.strategy.distributions.get_normal_gaussian_prior
+          params:
+            shape:
+            - ${dim_flow}
         solver_name: euler
         init_stepsize: 0.01
     schedule:
@@ -45,34 +51,38 @@ strategy:
             params:
               sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.conv_2d_cross_noattention.Conv2DConditionModel
+      target: sbisim.flows.models.SetTransformer.SetTransformer
       params:
         import_samples: 10
         dim_flow: ${dim_flow}
-        sample_size:  64
-        in_channels:  3
-        out_channels: 7
-        dropout: 0.05
-
-
+        sample_size: 1000
+        N_dim: 64
+        N_head: 8
+        depth: 2
 
 training:
   num_epochs: 300
   num_steps_per_epoch: 5000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 50
+    patience: 20
 
 test: 
   active: True
   tests:
     ranks:
-        target: sbisim.callbacks.C2STAllParameters
+        target: sbisim.callbacks.C2ST_OT_AllParameters
         params:
           save_every: 200
           savedir: ${runtime.logdir}
           num_total_samples: 100
-          observation_idx: 100
+          observation_idx: 200
+          batch_size: ${batch_size}
+    true_sampling:
+        target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
+        params:
+          savedir: ${runtime.logdir}
+          num_total_samples: 5000
           batch_size: ${batch_size}
 
 patience: 5

@@ -3,17 +3,25 @@ dim_flow: 4
 sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x32 
 dim_conditioning: 5
 dim_network: 4
-context_dim: 16
+context_dim: 32
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.90
-batch_size: 6tmux
+start_time: 0.80
+batch_size: 14
 weighting: one
 loss_type: flow
 scaling_type: none
-learning_rate: 0.001
+learning_rate: 0.0005
 hidden_dims:
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
+- 64
 - 64
 - 64
 - 64
@@ -59,7 +67,7 @@ strategy:
         dropout: 0.05
     weight_file_pretrained: ${weight_file_pretrained}
     model:
-      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregation
+      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoNewLoss
       params:
         simulator:
           target: sbisim.simulations.OdisseoSimulator
@@ -97,8 +105,8 @@ test:
         params:
           save_every: 200
           savedir: ${runtime.logdir}
-          num_total_samples: 200
-          observation_idx: 1_00
+          num_total_samples: 100
+          observation_idx: 2_00
           batch_size: ${batch_size}
 
 patience: 2

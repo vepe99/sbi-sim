@@ -1,3 +1,4 @@
+#REMEMBER TO USE CODA_VISIBILE_DEVICES=3
 name: Odisseo_0_gradient_signal
 dim_flow: 7
 sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x32 
@@ -7,13 +8,15 @@ context_dim: 16
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.90
+start_time: 0.95
 batch_size: 6
 weighting: one
 loss_type: flow
 scaling_type: none
-learning_rate: 0.001
+learning_rate: 0.0005
 hidden_dims:
+- 64
+- 64
 - 64
 - 64
 - 64
@@ -55,14 +58,14 @@ strategy:
         dim_flow: ${dim_flow}
         sample_size:  64
         in_channels:  3
-        out_channels: 4
+        out_channels: 7
         dropout: 0.05
     weight_file_pretrained: ${weight_file_pretrained}
     model:
       target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregation
       params:
         simulator:
-          target: sbisim.simulations.OdisseoSimulatoAllParameters
+          target: sbisim.simulations.OdisseoSimulatorAllParameters
         start_time: ${start_time}
 
         controlled_flow:
@@ -84,10 +87,10 @@ strategy:
 
 training:
   num_epochs: 20
-  num_steps_per_epoch: 2000
+  num_steps_per_epoch: 3000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 5
+    patience: 2
 
 test: 
   active: True
@@ -95,10 +98,10 @@ test:
     ranks:
         target: sbisim.callbacks.C2STAllParameters
         params:
-          save_every: 200
+          save_every: 100
           savedir: ${runtime.logdir}
           num_total_samples: 100
-          observation_idx: 2_00
+          observation_idx: 3_00
           batch_size: ${batch_size}
 
 patience: 2

@@ -3,21 +3,20 @@ dim_flow: 4
 sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x32 
 dim_conditioning: 5
 dim_network: 4
-context_dim: 16
-controlled_flow_in_dim: 10
+context_dim: 4
+controlled_flow_in_dim: 9
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.90
-batch_size: 6tmux
+batch_size: 5
 weighting: one
 loss_type: flow
 scaling_type: none
-learning_rate: 0.001
+learning_rate: 0.0005
 hidden_dims:
-- 64
-- 64
-- 64
-- 64
+- 32
+- 32
+
 
 
 
@@ -84,10 +83,10 @@ strategy:
 
 training:
   num_epochs: 5
-  num_steps_per_epoch: 3000
+  num_steps_per_epoch: 2500
   batch_size: ${batch_size}
   early_stopping:
-    patience: 2
+    patience: 5
 
 test: 
   active: True
@@ -97,8 +96,8 @@ test:
         params:
           save_every: 200
           savedir: ${runtime.logdir}
-          num_total_samples: 200
-          observation_idx: 1_00
+          num_total_samples: 100
+          observation_idx: 300
           batch_size: ${batch_size}
 
 patience: 2

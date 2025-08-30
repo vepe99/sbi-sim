@@ -8,16 +8,16 @@ controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.90
-batch_size: 6tmux
+batch_size: 6
 weighting: one
 loss_type: flow
 scaling_type: none
 learning_rate: 0.001
 hidden_dims:
-- 64
-- 64
-- 64
-- 64
+- 32
+- 32
+- 32
+- 32
 
 
 
@@ -97,8 +97,8 @@ test:
         params:
           save_every: 200
           savedir: ${runtime.logdir}
-          num_total_samples: 200
-          observation_idx: 1_00
+          num_total_samples: 100
+          observation_idx: 3_00
           batch_size: ${batch_size}
 
 patience: 2
