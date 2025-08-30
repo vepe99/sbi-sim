@@ -214,18 +214,32 @@ if __name__ == "__main__":
     path_to_save = '/export/data/vgiusepp/odisseo_data/data_fix_position/sbi-sim/data/sbi-benchmarks/odisseo_AllParameters/'
  
     # Create everything in one call
-    summary = create_dataset(
-        path_stored, 
-        path_to_save, 
-        num_simulations=[10_000, 100_000, 1_000_000, 100], 
-        num_observations=1000, 
-        seed=42
-    )
+    # summary = create_dataset(
+    #     path_stored, 
+    #     path_to_save, 
+    #     num_simulations=[10_000, 100_000, 1_000_000, 100], 
+    #     num_observations=1000, 
+    #     seed=42
+    # )    
     
-    print("\nSummary:")
-    print(f"Training datasets created: {list(summary['dataset_indices'].keys())}")
-    print(f"Single observation index: {summary['single_observation_index']}")
-    print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
-    print(f"Total files used: {summary['total_files_used']}")
+    # print("\nSummary:")
+    # print(f"Training datasets created: {list(summary['dataset_indices'].keys())}")
+    # print(f"Single observation index: {summary['single_observation_index']}")
+    # print(f"Multiple observation indices: {summary['multiple_observation_indices']}")
+    # print(f"Total files used: {summary['total_files_used']}")
 
 
+    true_observation_GD1 = np.load(os.path.join(path_stored, 'true.npz'))
+    x = true_observation_GD1['x'][:1000]  
+    theta = true_observation_GD1['theta']
+    reference_posterior = [[]]
+
+    # Create directory for the true observation
+    path_to_save_true_observation = os.path.join(path_to_save, f'true_observation')
+    if not os.path.exists(path_to_save_true_observation):
+        os.makedirs(path_to_save_true_observation)
+
+    # Save the true observation data
+    np.save(os.path.join(path_to_save_true_observation, f'observation.npy'), x)
+    np.save(os.path.join(path_to_save_true_observation, f'true_parameters.npy'), theta)
+    np.save(os.path.join(path_to_save_true_observation, f'reference_posterior_samples.npy'), reference_posterior)
