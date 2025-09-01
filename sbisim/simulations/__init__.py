@@ -1,1 +1,1 @@
-from .benchmark import LotkaVolterraSimulator, TwoMoonsSimulator, SLCPSimulator, SIRSimulator, SBISimulator, OdisseoSimulator, OdisseoSimulatorAllParameters, OdisseoSimulatorOT_AllParameters
+from .benchmark import LotkaVolterraSimulator, TwoMoonsSimulator, SLCPSimulator, SIRSimulator, SBISimulator, OdisseoSimulator, OdisseoSimulatorAllParameters, OdisseoSimulatorOT_AllParameters, OdisseoSimulatorOT_AllParametersPosition

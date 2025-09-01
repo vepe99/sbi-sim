@@ -365,7 +365,7 @@ class CorrectorDifferentiableSimulatorOdisseoNewLoss(nn.Module):
         output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
                                         rng=simulator_rng, deterministic=True, )  # noqa
 
-        return -1 * stream_likelihood(model_stream=output, obs_stream=target, obs_errors=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 0.00001]))
+        return -1 * stream_likelihood(model_stream=output, obs_stream=target, obs_errors=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 0.0001]))
 
 
     def forward_flow(self, t, theta, context, train=False):
@@ -393,10 +393,11 @@ class CorrectorDifferentiableSimulatorOdisseoNewLoss(nn.Module):
         output = jnp.concatenate([loss, grad], axis=1)
         output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
 
-        output = jnp.concatenate([flow_pred, t, output], axis=1)
-        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
-        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention 
+        # output = jnp.concatenate([flow_pred, t, output], axis=1) #baseline
 
+        # drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa, baseline 
+        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention
+        drift = flow_pred + self.controlled_flow_impl(timesteps=t, theta=theta, y=jnp.concatenate([flow_pred, output], axis=1), ) # noqa
         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
 
@@ -468,8 +469,8 @@ class CorrectorDifferentiableSimulatorOdisseoAggregationNewLoss(nn.Module):
 
         output = jnp.concatenate([flow_pred, t, output], axis=1)
         drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
-        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention 
-
+        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention
+        
         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
 
