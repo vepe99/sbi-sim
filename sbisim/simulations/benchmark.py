@@ -273,8 +273,8 @@ class OdisseoSimulatorOT_AllParameters(SBISimulator):
     vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(code_units.code_velocity)
 
     def run_simulation(self, rng_key, params):
-        params_samples = SimulationParams(t_end = params[0],
-                        Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time),
+        params_samples = SimulationParams(t_end = params[0] * u.Gyr.to(self.code_units.code_time),
+                        Plummer_params = PlummerParams(Mtot=params[1] * u.Msun.to(self.code_units.code_mass),
                                                        a = params[2] * u.kpc.to(self.code_units.code_length),),
                         NFW_params = NFWParams(Mvir=params[3] * u.Msun.to(self.code_units.code_mass),
                                                r_s= params[4] * u.kpc.to(self.code_units.code_length)),
@@ -390,8 +390,8 @@ class OdisseoSimulatorOT_AllParametersPosition(SBISimulator):
     
 
     def run_simulation(self, rng_key, params):
-        params_samples = SimulationParams(t_end = params[0],
-                        Plummer_params = PlummerParams(Mtot=params[1] * u.Gyr.to(self.code_units.code_time),
+        params_samples = SimulationParams(t_end = params[0] * u.Gyr.to(self.code_units.code_time),
+                        Plummer_params = PlummerParams(Mtot=params[1] * u.Msun.to(self.code_units.code_mass),
                                                        a = params[2] * u.kpc.to(self.code_units.code_length),),
                         NFW_params = NFWParams(Mvir=params[3] * u.Msun.to(self.code_units.code_mass),
                                                r_s= params[4] * u.kpc.to(self.code_units.code_length)),
