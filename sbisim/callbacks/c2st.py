@@ -1053,13 +1053,8 @@ class C2ST_OT_AllParameters(Callback):
                             10**log10(1/4 * 4.3683325e11), 
                             1/4 * 16,
                             10**log10(1/4 *68_193_902_782.346756),
-                            1/4 * 3,
-                            10.0, #x
-                            0.1, #y
-                            6.0, #z
-                            90.0, #vx
-                            -280.0, #vy
-                            -120.0]), #vz
+                             1/4 * 3,
+                              ])
         self.high=jnp.array([5, 
                              10**4.5, 
                              2 * 0.008, 
@@ -1067,15 +1062,10 @@ class C2ST_OT_AllParameters(Callback):
                              2 * 16,
                              10**log10(2 * 68_193_902_782.346756),
                              2 * 3,
-                             14.0, #x
-                             2.5,  #y
-                             8.0,  #z
-                             115.0, #vx
-                             -230.0, #vy
-                             -80.0]) #vz
+                             ])
         self.observation_idx = [i for i in range(1, observation_idx)]
         self.batch_size = batch_size
-        self.labels = ['$t_{end}$', '$M_{plummer}$', '$a_{plummer}$', '$M_{NFW}$', '$r_{NFW}$', '$M_{MN}$', '$a_{MN}$', '$x$', '$y$', '$z$', '$vx$', '$vy$', '$vz$']
+        self.labels = ['$t_{end}$', '$M_{plummer}$', '$a_{plummer}$', '$M_{NFW}$', '$r_{NFW}$', '$M_{MN}$', '$a_{MN}$']
         if self.savedir is not None:
             os.makedirs(self.savedir + '/pictures', exist_ok=True)
         
@@ -1377,8 +1367,13 @@ class C2ST_OT_AllParametersPositions(Callback):
                             10**log10(1/4 * 4.3683325e11), 
                             1/4 * 16,
                             10**log10(1/4 *68_193_902_782.346756),
-                             1/4 * 3,
-                              ])
+                            1/4 * 3,
+                            10.0, #x
+                            0.1, #y
+                            6.0, #z
+                            90.0, #vx
+                            -280.0, #vy
+                            -120.0]) #vz
         self.high=jnp.array([5, 
                              10**4.5, 
                              2 * 0.008, 
@@ -1386,10 +1381,15 @@ class C2ST_OT_AllParametersPositions(Callback):
                              2 * 16,
                              10**log10(2 * 68_193_902_782.346756),
                              2 * 3,
-                             ])
+                             14.0, #x
+                             2.5,  #y
+                             8.0,  #z
+                             115.0, #vx
+                             -230.0, #vy
+                             -80.0]) #vz
         self.observation_idx = [i for i in range(1, observation_idx)]
         self.batch_size = batch_size
-        self.labels = ['$t_{end}$', '$M_{plummer}$', '$a_{plummer}$', '$M_{NFW}$', '$r_{NFW}$', '$M_{MN}$', '$a_{MN}$']
+        self.labels = ['$t_{end}$', '$M_{plummer}$', '$a_{plummer}$', '$M_{NFW}$', '$r_{NFW}$', '$M_{MN}$', '$a_{MN}$', '$x$', '$y$', '$z$', '$v_x$', '$v_y$', '$v_z$']
         if self.savedir is not None:
             os.makedirs(self.savedir + '/pictures', exist_ok=True)
         
@@ -1404,8 +1404,8 @@ class C2ST_OT_AllParametersPositions(Callback):
         figure_list = []
         fig, axes = plt.subplots(1, 4, figsize=(30, 5))  # Create figure and 4 axes once
 
-        true_theta_test_set = np.zeros((len(self.observation_idx), 7))
-        predicted_theta_test_set = np.zeros((self.num_total_samples, len(self.observation_idx), 7))
+        true_theta_test_set = np.zeros((len(self.observation_idx), 13))
+        predicted_theta_test_set = np.zeros((self.num_total_samples, len(self.observation_idx), 13))
 
         for id in self.observation_idx:
 
@@ -1669,6 +1669,116 @@ class C2ST_OT_AllParametersPositions(Callback):
         ax.set_xlabel("Credibility Level")
 
         return fig
+    
+
+class C2ST_OT_AllParametersPositions_TrueSimulation(Callback):
+
+    name: str = 'rankss'
+    save_every: int = 0
+
+    # observation_idx: List[int] = [i for i in range(1, observation_idx)]
+    num_total_samples: int = 1000
+    batch_size: int = 13
+
+    def __init__(self, savedir: str = None, num_total_samples: int = 1_000, batch_size: int = 6):
+        super().__init__()
+        self.savedir = savedir
+        self.num_total_samples = num_total_samples
+        self.low=jnp.array([0.5,
+                            10**3., 
+                            1/4 * 0.008,
+                            10**log10(1/4 * 4.3683325e11), 
+                            1/4 * 16,
+                            10**log10(1/4 *68_193_902_782.346756),
+                            1/4 * 3,
+                            10.0, #x
+                            0.1, #y
+                            6.0, #z
+                            90.0, #vx
+                            -280.0, #vy
+                            -120.0]) #vz
+        self.high=jnp.array([5, 
+                             10**4.5, 
+                             2 * 0.008, 
+                             10**log10(2 * 4.3683325e11),
+                             2 * 16,
+                             10**log10(2 * 68_193_902_782.346756),
+                             2 * 3,
+                             14.0, #x
+                             2.5,  #y
+                             8.0,  #z
+                             115.0, #vx
+                             -230.0, #vy
+                             -80.0]) #vz
+        code_length = 10 * u.kpc
+        code_mass = 1e4 * u.Msun
+        G = 1
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+
+        self.true_GD1_observation_path = '/export/data/vgiusepp/odisseo_data/data_fix_position/true.npz'
+        self.batch_size = batch_size
+        self.labels = ['$t_{end}$', '$M_{plummer}$', '$a_{plummer}$', '$M_{NFW}$', '$r_{NFW}$', '$M_{MN}$', '$a_{MN}$', '$x$', '$y$', '$z$', '$v_x$', '$v_y$', '$v_z$']
+        if self.savedir is not None:
+            os.makedirs(self.savedir + '/pictures', exist_ok=True)
+        
+    def __call__(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+        return self._call(logs, rng, *args, **kwargs)
+
+    def _call(self, logs: dict, rng: jr.PRNGKey, strategy: Strategy,
+              train_loader: GeneratorDataloader, val_loader: GeneratorDataloader, *args, **kwargs) \
+            -> Tuple[dict, jr.PRNGKey]:
+
+        print('start testing')
+        observation = jnp.array(np.load(self.true_GD1_observation_path)['x'][:1000]).reshape(1, 1000, 6)
+        true_theta = jnp.array(np.load(self.true_GD1_observation_path)['theta'][:1000])
+        true_theta_pos = jnp.array([11.8, 0.79, 6.4, 109.5, -254.5, -90.3]).repeat(1000)
+        true_theta = jnp.concatenate([true_theta, true_theta_pos], axis=-1)
+
+        observation = jnp.array(observation).repeat(self.num_total_samples, axis=0)
+        posterior_samples, _ = strategy.sample(self.num_total_samples, rng, conditioning=observation,
+                                                batch_size=self.batch_size)
+        posterior_samples['samples'] = norm.cdf(posterior_samples['samples']) * (self.high - self.low) + self.low
+        np.savez(f"{self.savedir}/pictures/true_observation_prediction.npz",
+                 predicted_theta=posterior_samples['samples'],
+                 true_theta=true_theta)
+
+        df = pd.DataFrame(posterior_samples['samples'], columns=self.labels)
+        df = df.astype(float)
+        # Convert to float and handle any non-numeric columns
+        numeric_df = df.select_dtypes(include=[np.number])
+        if numeric_df.empty:
+            # If no numeric columns, convert all to float
+            numeric_df = df.astype(float)
+        # Create corner plot with ChainConsumer
+        c = ChainConsumer()
+        c.add_chain(Chain(samples=numeric_df, name="Experimental Results", ), )
+        c.add_truth(Truth(location={
+             '$t_{end}$': true_theta[0] * self.code_units.code_time.to(u.Gyr),
+             '$M_{plummer}$': true_theta[1] * self.code_units.code_mass.to(u.Msun),
+             '$a_{plummer}$': true_theta[2] * self.code_units.code_length.to(u.kpc),
+             '$M_{NFW}$': true_theta[3] * self.code_units.code_mass.to(u.Msun),
+             '$r_{NFW}$': true_theta[4] * self.code_units.code_length.to(u.kpc),
+             '$M_{MN}$': true_theta[5] * self.code_units.code_mass.to(u.Msun),
+             '$a_{MN}$': true_theta[6] * self.code_units.code_length.to(u.kpc),
+             '$x$': true_theta[7],
+             '$y$': true_theta[8],
+             '$z$': true_theta[9],
+             '$v_x$': true_theta[10],
+             '$v_y$': true_theta[11],
+             '$v_z$': true_theta[12]
+        }))
+        fig = c.plotter.plot()   
+        fig.savefig(f"{self.savedir}/pictures/true_cornerplot.pdf")
+
+        logs['posteriors'] = [wandb.Image(fig)]
+        plt.close(fig)
+
+        return logs, rng
+    
+    def on_test(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
+        return self.__call__(logs, rng, *args, **kwargs)
+    
 # class C2ST(Callback):
 
 #     name: str = 'c2st'

@@ -223,7 +223,7 @@ if __name__ == "__main__":
     summary = create_dataset(
         path_stored, 
         path_to_save, 
-        num_simulations=[1000, 10_000,], 
+        num_simulations=[1000, 10_000, 100_000], 
         num_observations=1000, 
         seed=42
     )    
