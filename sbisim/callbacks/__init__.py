@@ -1,3 +1,3 @@
-from .c2st import C2ST, C2ST100, C2STAllParameters, C2ST_OT_AllParameters, C2ST_OT_AllParameters_TrueSimulation, C2ST_OT_AllParametersPositions, C2ST_OT_AllParametersPositions_TrueSimulation
+from .c2st import C2ST, C2ST100, C2STAllParameters, C2ST_OT_AllParameters, C2ST_OT_AllParameters_TrueSimulation, C2ST_OT_AllParametersPositions, C2ST_OT_AllParametersPositions_TrueSimulation, C2ST_OT_AllParametersPositions_newprior, C2ST_OT_AllParametersPositions_newprior_TrueSimulation, C2ST_OT_LOGAllParametersPositions, C2ST_OT_LOGAllParametersPositions_TrueSimulation
 from .visualization import BenchmarkScatterPlot, corner_plot_posterior, ranks
 from .two_dimensional import TwoDimensionalPlot

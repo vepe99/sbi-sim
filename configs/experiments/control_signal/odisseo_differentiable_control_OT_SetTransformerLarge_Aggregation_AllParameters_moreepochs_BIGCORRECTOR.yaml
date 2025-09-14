@@ -5,9 +5,9 @@ sample_size: 64 #should be a 64x64 histogram, maybe i should adpat it to be 64x3
 dim_conditioning: 5
 dim_network: 7
 context_dim: 64
-controlled_flow_in_dim: 10
-aggregation_out_dim: 5
-aggregation_in_dim: 40
+controlled_flow_in_dim: 18
+aggregation_out_dim: 10
+aggregation_in_dim: 8
 start_time: 0.80
 batch_size: 13
 weighting: one
@@ -15,12 +15,19 @@ loss_type: fm_ot
 scaling_type: none
 learning_rate: 0.0001
 hidden_dims:
+- 32
+- 64
+- 128
 - 256
+- 512
+- 512
+- 512
+- 512
+- 512
 - 256
 - 128
-- 128
 - 64
-- 64
+- 32
 
 
 
@@ -98,14 +105,14 @@ training:
 test: 
   active: True
   tests:
-    # ranks:
-    #     target: sbisim.callbacks.C2ST_OT_AllParameters
-    #     params:
-    #       save_every: 200
-    #       savedir: ${runtime.logdir}
-    #       num_total_samples: 500
-    #       observation_idx: 500
-    #       batch_size: ${batch_size}
+    ranks:
+        target: sbisim.callbacks.C2ST_OT_AllParameters
+        params:
+          save_every: 200
+          savedir: ${runtime.logdir}
+          num_total_samples: 100
+          observation_idx: 200
+          batch_size: ${batch_size}
     true_sampling:
         target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
         params:

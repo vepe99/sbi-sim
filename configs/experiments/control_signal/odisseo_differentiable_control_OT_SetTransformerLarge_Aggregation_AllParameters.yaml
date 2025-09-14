@@ -9,7 +9,7 @@ controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.80
-batch_size: 6
+batch_size: 13
 weighting: one
 loss_type: fm_ot
 scaling_type: none

@@ -73,21 +73,23 @@ class GLU(nn.Module):
 
 class BaseFMPE(nn.Module):
 
-    residual_blocks: List[Tuple[int, int]]
+    
     gelu: List[bool]
     time_embed_dim: int
     dim_flow: int
+    residual_blocks = [(64, 3), (32, 2)]
 
     def setup(self):
 
         self.time_proj = FlaxTimesteps(
-            self.time_embed_dim, flip_sin_to_cos=True, freq_shift=0
+            self.time_embed_dim, flip_sin_to_cos=True, downscale_freq_shift=0
         )
 
         layers = []
 
         self.upsample = nn.Dense(self.residual_blocks[0][0],
                                  kernel_init=kernel_init_fn(), use_bias=False)
+        print(self.residual_blocks)
 
         for i, (out_dim, repetitions) in enumerate(self.residual_blocks):
 
@@ -209,7 +211,7 @@ class BaseBenchmarkFMPE(nn.Module):
 
         self.blocks = blocks
 
-    def __call__(self, t, theta, x=None, train=True):
+    def __call__(self, t, theta, x=None, train=True, context=None):
 
         if not isinstance(t, jnp.ndarray):
             t = jnp.array([t], dtype=theta.dtype)
@@ -246,6 +248,7 @@ class DenseResidualBlocks(nn.Module):
     hidden_dim: int
     activation_fn: str = 'elu'
     context_dim: int = 0
+    use_layer_norm: bool = False 
 
     def setup(self) -> None:
 
@@ -260,11 +263,17 @@ class DenseResidualBlocks(nn.Module):
                                bias_init=pytorch_bias_init(self.hidden_dim))
         self.layer2 = nn.Dense(self.hidden_dim, kernel_init=uniform_shifted(), bias_init=uniform_shifted())
 
+        # Add layer normalization
+        if self.use_layer_norm:
+            self.norm1 = nn.LayerNorm()
+            self.norm2 = nn.LayerNorm()
+
         if self.context_dim > 0:
             self.context_layer = nn.Dense(self.hidden_dim, kernel_init=lecun_uniform(),
                                           bias_init=pytorch_bias_init(self.context_dim))
 
     def __call__(self, x, context = None):
+
 
         x_skip = x
         x = self.activation(x)
@@ -324,6 +333,7 @@ class DenseResidualNet(nn.Module):
     in_dim: int
     context_dim: int = 0
     activation_fn: str = 'elu'
+    use_layer_norm: bool = False  
 
     def setup(self):
 
@@ -332,10 +342,14 @@ class DenseResidualNet(nn.Module):
 
         self.dense_in = nn.Dense(self.hidden_dims[0], kernel_init=lecun_uniform(),
                                  bias_init=pytorch_bias_init(self.in_dim))
+         # Add input normalization
+        if self.use_layer_norm:
+            self.input_norm = nn.LayerNorm( epsilon=1e-4)
 
         for hidden_dim, hidden_dim_next in zip(self.hidden_dims, list(self.hidden_dims[1:]) + [self.out_dim]):
             blocks.append(DenseResidualBlocks(hidden_dim, context_dim = self.context_dim,
-                                              activation_fn=self.activation_fn))
+                                              activation_fn=self.activation_fn,
+                                              use_layer_norm=self.use_layer_norm))
             if hidden_dim != hidden_dim_next:
                 projections.append(nn.Dense(hidden_dim_next, use_bias=True,
                                            kernel_init=lecun_uniform(),
@@ -348,6 +362,16 @@ class DenseResidualNet(nn.Module):
 
     def __call__(self, theta, context = None, train=True):
 
+        print('theta before norm', theta)
+
+        # Normalize input after first dense layer
+        if self.use_layer_norm:
+            theta = self.input_norm(theta,)
+            # theta = nn.BatchNorm(use_running_average=not train)(theta)
+
+        print('theta after norm', theta)
+
+    
         x = self.dense_in(theta)
 
         for block, projection in zip(self.blocks, self.projections):
@@ -634,3 +658,176 @@ class ConvolutionalEmbeddingNet(nn.Module):
         ])
         
         return final_conv(h)
+    
+
+"""
+Updated Theta-Context Transformer
+
+Changes:
+- `theta` is (B, dim_flow) and each scalar along dim_flow is treated as a token.
+- `t` is embedded as a separate token and appended to Q and K.
+- `context` is now of shape (B, dim_flow+1). Each scalar along that dimension is treated as a token (so context aligns with theta+t). LayerNorm is applied per-token before embedding.
+- All inputs become sequences of tokens that are embedded into embed_dim vectors.
+- Attention is done with configurable heads. Context tokens are included in K (always) and optionally in V.
+- Feed-forward network is applied token-wise to theta tokens.
+"""
+
+from typing import Optional, Callable
+
+import jax.numpy as jnp
+import flax.linen as nn
+
+
+class ThetaContextTransformer(nn.Module):
+    embed_dim: int
+    num_heads: int = 8
+    include_context_in_v: bool = True
+    dropout_rate: float = 0.0
+    use_bias: bool = True
+    feed_forward_ctor: Optional[Callable[[], nn.Module]] = None
+
+    def setup(self):
+        if self.embed_dim % self.num_heads != 0:
+            raise ValueError("embed_dim must be divisible by num_heads")
+        self.head_dim = self.embed_dim // self.num_heads
+
+        # Embeddings
+        self.theta_embed = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.t_embed = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.context_norm = nn.LayerNorm()
+        self.context_embed = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+
+        # Q/K/V projections
+        self.q_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.k_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.v_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+
+        self.out_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+
+        if self.feed_forward_ctor is not None:
+            self.feed_forward = self.feed_forward_ctor()
+        else:
+            self.feed_forward = None
+
+        self.attn_dropout = nn.Dropout(rate=self.dropout_rate)
+        self.out_dropout = nn.Dropout(rate=self.dropout_rate)
+        # Add output projection to map back to parameter space
+        self.output_proj = nn.Dense(1, use_bias=self.use_bias)  # Project to scalar per token
+
+    def _split_heads(self, x):
+        B, L, E = x.shape
+        x = x.reshape(B, L, self.num_heads, self.head_dim)
+        return x.transpose(0, 2, 1, 3)
+
+    def _combine_heads(self, x):
+        B, H, L, D = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, L, H * D)
+
+    @nn.compact
+    def __call__(self, theta: jnp.ndarray, context: Optional[jnp.ndarray] = None, t: Optional[jnp.ndarray] = None, *, deterministic: bool = True):
+        """
+        Parameters
+        ----------
+        theta: (B, L)  -- dim_flow scalars, each a token
+        context: (B, L+1)  -- context correction terms, each a token
+        t: (B,) or (B,1) -- scalar per batch, becomes its own token
+
+        Returns
+        -------
+        theta_updated: (B, L, embed_dim) -- updated token embeddings for theta tokens
+        info: dict with 'attn_weights'
+        """
+        B, L = theta.shape
+
+        # --- embed theta tokens ---
+        theta_in = theta[..., None]  # (B, L, 1)
+        theta_e = self.theta_embed(theta_in)  # (B, L, E)
+
+        # --- embed t ---
+        if t is not None:
+            t_arr = jnp.asarray(t)
+            if t_arr.ndim == 1:
+                t_arr = t_arr[:, None]
+            t_e = self.t_embed(t_arr)[:, None, :]  # (B, 1, E)
+        else:
+            t_e = None
+
+        # --- embed context tokens ---
+        if context is not None:
+            # if context.shape[1] != L :
+            #     raise ValueError("context must have shape (B, L)")
+            # treat each scalar as a token
+            context_in = context[..., None]  # (B, L+1, 1)
+            # apply norm per token
+            context_normed = self.context_norm(context_in)
+            ctx_e = self.context_embed(context_normed)  # (B, L+1, E)
+        else:
+            ctx_e = None
+
+        # --- Build Q ---
+        q_parts = [theta_e]
+        if t_e is not None:
+            q_parts.append(t_e)
+        q_seq = jnp.concatenate(q_parts, axis=1)  # (B, Lq, E)
+
+        # --- Build K ---
+        k_parts = [theta_e]
+        if t_e is not None:
+            k_parts.append(t_e)
+        if ctx_e is not None:
+            k_parts.append(ctx_e)
+        k_seq = jnp.concatenate(k_parts, axis=1)
+
+        # --- Build V ---
+        v_parts = [theta_e]
+        if t_e is not None:
+            v_parts.append(t_e)
+        if self.include_context_in_v and ctx_e is not None:
+            v_parts.append(ctx_e)
+        v_seq = jnp.concatenate(v_parts, axis=1)
+
+        # --- Project Q, K, V ---
+        Q = self.q_proj(q_seq)
+        K = self.k_proj(k_seq)
+        V = self.v_proj(v_seq)
+
+        # --- Attention ---
+        Qh = self._split_heads(Q)
+        Kh = self._split_heads(K)
+        Vh = self._split_heads(V)
+
+        scale = 1.0 / jnp.sqrt(self.head_dim)
+        attn_logits = jnp.einsum('bhqd,bhkd->bhqk', Qh, Kh) * scale
+        attn_weights = nn.softmax(attn_logits, axis=-1)
+        attn_weights = self.attn_dropout(attn_weights, deterministic=deterministic)
+
+        attn_out = jnp.einsum('bhqk,bhkd->bhqd', attn_weights, Vh)
+        attn_out_comb = self._combine_heads(attn_out)
+        attn_out_comb = self.out_proj(attn_out_comb)
+        attn_out_comb = self.out_dropout(attn_out_comb, deterministic=deterministic)
+
+        # take updated first L positions (theta tokens)
+        theta_attn_updated = attn_out_comb[:, :L, :] + theta_e
+
+        # --- Feed-forward per theta token ---
+        if self.feed_forward is not None:
+            tokens_flat = theta_attn_updated.reshape(B * L, self.embed_dim)
+            if ctx_e is not None:
+                ctx_flat = ctx_e.reshape(B, -1)
+                ctx_tiled = jnp.repeat(ctx_flat[:, None, :], L, axis=1).reshape(B * L, -1)
+                ff_input = jnp.concatenate([tokens_flat, ctx_tiled], axis=-1)
+            else:
+                ff_input = tokens_flat
+            ff_out = self.feed_forward(ff_input)
+            if ff_out.shape[-1] != self.embed_dim:
+                raise ValueError("feed_forward must output last dim == embed_dim")
+            theta_ff = ff_out.reshape(B, L, self.embed_dim)
+            theta_updated = theta_attn_updated + theta_ff
+        else:
+            theta_updated = theta_attn_updated
+
+        # Project back to original parameter space
+        theta_correction = self.output_proj(theta_updated)  # (B, L, 1)
+        theta_correction = theta_correction.squeeze(-1)     # (B, L)
+        
+        return theta_correction  # Same shape as input theta

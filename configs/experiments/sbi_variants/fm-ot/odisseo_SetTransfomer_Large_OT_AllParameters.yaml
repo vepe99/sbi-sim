@@ -75,15 +75,15 @@ test:
         params:
           save_every: 200
           savedir: ${runtime.logdir}
-          num_total_samples: 100
-          observation_idx: 200
+          num_total_samples: 500
+          observation_idx: 500
           batch_size: ${batch_size}
-    true_sampling:
-        target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
-        params:
-          savedir: ${runtime.logdir}
-          num_total_samples: 5000
-          batch_size: ${batch_size}
+    # true_sampling:
+    #     target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
+    #     params:
+    #       savedir: ${runtime.logdir}
+    #       num_total_samples: 5000
+    #       batch_size: ${batch_size}
 
 patience: 5
 optimization:

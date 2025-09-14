@@ -308,6 +308,7 @@ class SetTransformer(nn.Module, FlaxModelMixin, ConfigMixin):
             mid_block_additional_residual: Optional[jnp.ndarray] = None,
             return_dict: bool = True,
             train: bool = False,
+            return_embedding: bool = False,
     ) -> jnp.ndarray:
         r"""
         Args:
@@ -349,7 +350,10 @@ class SetTransformer(nn.Module, FlaxModelMixin, ConfigMixin):
 
         out = self.dense_out(sample, )
 
-        return out
+        if not return_embedding:
+            return out
+        else:
+            return out, sample
 
 
 

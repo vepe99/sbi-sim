@@ -1,0 +1,12 @@
+optimizer:
+  target: sbisim.optimization.adam.AdamWOptax
+  params:
+    weight_decay: 1e-5
+
+scheduler:
+  target: sbisim.optimization.schedules.ReduceLROnPlateau
+  params:
+    learning_rate: ${learning_rate}
+    factor: 0.2
+    patience: ${patience}
+    min_lr: 1e-7

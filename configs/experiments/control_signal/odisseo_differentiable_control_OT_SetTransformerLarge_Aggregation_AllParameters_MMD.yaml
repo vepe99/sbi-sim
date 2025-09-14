@@ -9,7 +9,7 @@ controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
 start_time: 0.80
-batch_size: 6
+batch_size: 12
 weighting: one
 loss_type: fm_ot
 scaling_type: none
@@ -98,14 +98,14 @@ training:
 test: 
   active: True
   tests:
-    ranks:
-        target: sbisim.callbacks.C2ST_OT_AllParameters
-        params:
-          save_every: 200
-          savedir: ${runtime.logdir}
-          num_total_samples: 100
-          observation_idx: 200
-          batch_size: ${batch_size}
+    # ranks:
+    #     target: sbisim.callbacks.C2ST_OT_AllParameters
+    #     params:
+    #       save_every: 200
+    #       savedir: ${runtime.logdir}
+    #       num_total_samples: 100
+    #       observation_idx: 200
+          # batch_size: ${batch_size}
     true_sampling:
         target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
         params:

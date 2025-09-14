@@ -15,7 +15,7 @@ learning_rate: 0.0005
 
 data:
   target: sbisim.data.benchmarks.OdisseoOTAllParameters
-  _file: configs/datasets/benchmarks/10e5_dataset.yaml
+  _file: configs/datasets/benchmarks/10e4_dataset.yaml
   normalization : True
 
 strategy:
@@ -51,7 +51,7 @@ strategy:
             params:
               sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.SetTransformer_GLU.SetTransformer
+      target: sbisim.flows.models.SetTransformer.SetTransformer
       params:
         import_samples: 10
         dim_flow: ${dim_flow}
@@ -65,7 +65,7 @@ training:
   num_steps_per_epoch: 6000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 20
+    patience: 50
 
 test: 
   active: True
@@ -75,14 +75,14 @@ test:
         params:
           save_every: 200
           savedir: ${runtime.logdir}
-          num_total_samples: 100
-          observation_idx: 200
+          num_total_samples: 500
+          observation_idx: 500
           batch_size: ${batch_size}
     # true_sampling:
     #     target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
     #     params:
     #       savedir: ${runtime.logdir}
-    #       num_total_samples: 10000
+    #       num_total_samples: 5000
     #       batch_size: ${batch_size}
 
 patience: 5

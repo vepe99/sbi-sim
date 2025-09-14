@@ -8,19 +8,15 @@ context_dim: 64
 controlled_flow_in_dim: 10
 aggregation_out_dim: 5
 aggregation_in_dim: 40
-start_time: 0.80
+start_time: 0.90
 batch_size: 13
 weighting: one
 loss_type: fm_ot
 scaling_type: none
 learning_rate: 0.0001
 hidden_dims:
-- 256
-- 256
-- 128
-- 128
 - 64
-- 64
+
 
 
 
@@ -65,20 +61,18 @@ strategy:
         depth: 2
     weight_file_pretrained: ${weight_file_pretrained}
     model:
-      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregationNewLoss
+      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoNewLoss
       params:
         simulator:
           target: sbisim.simulations.OdisseoSimulatorOT_AllParameters
         start_time: ${start_time}
 
         controlled_flow:
-          target: sbisim.flows.models.fmpe.DenseResidualNet
+          target: sbisim.flows.models.fmpe.BaseFMPE
           params:
-            hidden_dims: ${hidden_dims}
-            out_dim: ${dim_flow}
-            in_dim: ${controlled_flow_in_dim}
-            activation_fn: gelu
-            context_dim: ${context_dim}
+            gelu: [True, True]
+            dim_flow: ${dim_flow}
+            time_embed_dim: 16
         aggregation:
           target: sbisim.flows.models.fmpe.DenseResidualNet
           params:
@@ -98,14 +92,14 @@ training:
 test: 
   active: True
   tests:
-    # ranks:
-    #     target: sbisim.callbacks.C2ST_OT_AllParameters
-    #     params:
-    #       save_every: 200
-    #       savedir: ${runtime.logdir}
-    #       num_total_samples: 500
-    #       observation_idx: 500
-    #       batch_size: ${batch_size}
+    ranks:
+        target: sbisim.callbacks.C2ST_OT_AllParameters
+        params:
+          save_every: 200
+          savedir: ${runtime.logdir}
+          num_total_samples: 100
+          observation_idx: 200
+          batch_size: ${batch_size}
     true_sampling:
         target: sbisim.callbacks.c2st.C2ST_OT_AllParameters_TrueSimulation
         params:
