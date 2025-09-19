@@ -8,6 +8,8 @@ from jax._src import core
 from diffusers.models.embeddings_flax import FlaxTimesteps
 from ..cnf import ContinuousNormalizingFlow
 import jax.numpy as jnp
+from jax.scipy.special import logsumexp
+
 
 import flax.linen as nn
 
@@ -831,3 +833,187 @@ class ThetaContextTransformer(nn.Module):
         theta_correction = theta_correction.squeeze(-1)     # (B, L)
         
         return theta_correction  # Same shape as input theta
+
+
+class ThetaContextTransformerBlock(nn.Module):
+    embed_dim: int
+    num_heads: int = 8
+    include_context_in_v: bool = True
+    dropout_rate: float = 0.0
+    use_bias: bool = True
+    feed_forward_ctor: Optional[Callable[[], nn.Module]] = None
+
+    def setup(self):
+        if self.embed_dim % self.num_heads != 0:
+            raise ValueError("embed_dim must be divisible by num_heads")
+        self.head_dim = self.embed_dim // self.num_heads
+
+        # Embeddings
+        self.theta_embed = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.t_embed = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.context_norm = nn.LayerNorm()
+        self.context_embed = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+
+        # Q/K/V projections
+        self.q_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.k_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+        self.v_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+
+        self.out_proj = nn.Dense(self.embed_dim, use_bias=self.use_bias)
+
+        # Residual LayerNorms
+        self.attn_norm = nn.LayerNorm()
+        self.ffn_norm = nn.LayerNorm()
+
+        # Feed-forward network
+        if self.feed_forward_ctor is not None:
+            self.feed_forward = self.feed_forward_ctor()
+        else:
+            self.feed_forward = nn.Sequential([
+                nn.Dense(self.embed_dim * 4, use_bias=self.use_bias),
+                nn.gelu,
+                nn.Dense(self.embed_dim, use_bias=self.use_bias),
+            ])
+
+        self.attn_dropout = nn.Dropout(rate=self.dropout_rate)
+        self.out_dropout = nn.Dropout(rate=self.dropout_rate)
+
+        # Project back to parameter space (scalar per token)
+        self.output_proj = nn.Dense(1, use_bias=self.use_bias)
+
+    def _split_heads(self, x):
+        B, L, E = x.shape
+        x = x.reshape(B, L, self.num_heads, self.head_dim)
+        return x.transpose(0, 2, 1, 3)
+
+    def _combine_heads(self, x):
+        B, H, L, D = x.shape
+        return x.transpose(0, 2, 1, 3).reshape(B, L, H * D)
+
+    def __call__(self, theta: jnp.ndarray, context: Optional[jnp.ndarray] = None,
+                 t: Optional[jnp.ndarray] = None, *, deterministic: bool = True):
+        """
+        Parameters
+        ----------
+        theta: (B, L)        -- dim_flow scalars, each a token
+        context: (B, L+1)    -- context correction terms, each a token
+        t: (B,) or (B,1)     -- scalar per batch, becomes its own token
+
+        Returns
+        -------
+        theta_correction: (B, L) -- updated corrections for theta
+        """
+        B, L = theta.shape
+
+        # --- Embed theta ---
+        theta_in = theta[..., None]  # (B, L, 1)
+        theta_e = self.theta_embed(theta_in)  # (B, L, E)
+
+        # --- Embed t ---
+        if t is not None:
+            t_arr = jnp.asarray(t)
+            if t_arr.ndim == 1:
+                t_arr = t_arr[:, None]
+            t_e = self.t_embed(t_arr)[:, None, :]  # (B, 1, E)
+        else:
+            t_e = None
+
+        # --- Embed context ---
+        if context is not None:
+            context_in = context[..., None]  # (B, L+1, 1)
+            context_normed = self.context_norm(context_in)
+            ctx_e = self.context_embed(context_normed)  # (B, L+1, E)
+        else:
+            ctx_e = None
+
+        # =====================
+        # Multi-head Attention (with residual + pre-norm)
+        # =====================
+        attn_in = self.attn_norm(theta_e)
+
+        # Q sequence: theta (+ t)
+        q_parts = [attn_in]
+        if t_e is not None:
+            q_parts.append(t_e)
+        q_seq = jnp.concatenate(q_parts, axis=1)  # (B, Lq, E)
+
+        # K/V sequence: theta (+ t) (+ context)
+        kv_parts = [attn_in]
+        if t_e is not None:
+            kv_parts.append(t_e)
+        if ctx_e is not None:
+            kv_parts.append(ctx_e)
+        kv_seq = jnp.concatenate(kv_parts, axis=1)  # (B, Lkv, E)
+
+        # Project Q/K/V
+        Q = self.q_proj(q_seq)
+        K = self.k_proj(kv_seq)
+        if self.include_context_in_v:
+            V = self.v_proj(kv_seq)
+        else:
+            V = self.v_proj(attn_in)  # same length as K
+
+        # Attention computation
+        Qh = self._split_heads(Q)
+        Kh = self._split_heads(K)
+        Vh = self._split_heads(V)
+
+        scale = 1.0 / jnp.sqrt(self.head_dim)
+        attn_logits = jnp.einsum('bhqd,bhkd->bhqk', Qh, Kh) * scale
+        attn_weights = nn.softmax(attn_logits, axis=-1)
+        attn_weights = self.attn_dropout(attn_weights, deterministic=deterministic)
+
+        attn_out = jnp.einsum('bhqk,bhkd->bhqd', attn_weights, Vh)
+        attn_out_comb = self._combine_heads(attn_out)
+        attn_out_comb = self.out_proj(attn_out_comb)
+        attn_out_comb = self.out_dropout(attn_out_comb, deterministic=deterministic)
+
+        attn_out_comb = attn_out_comb[:, :L, :]  # ensure shape (B, L, E)
+        x = theta_e + attn_out_comb
+        # Residual connection
+        x = theta_e + attn_out_comb
+
+        # =====================
+        # Feed-forward (with residual + pre-norm)
+        # =====================
+        ffn_in = self.ffn_norm(x)
+        ffn_out = self.feed_forward(ffn_in)
+        x = x + ffn_out  # residual
+
+        # Project back to parameter space
+        theta_correction = self.output_proj(x)  # (B, L, 1)
+        theta_correction = theta_correction.squeeze(-1)  # (B, L)
+
+        return theta_correction
+
+
+
+
+class ThetaContextTransformerStack(nn.Module):
+    embed_dim: int
+    num_heads: int = 8
+    num_layers: int = 4
+    include_context_in_v: bool = True
+    dropout_rate: float = 0.0
+    use_bias: bool = True
+    feed_forward_ctor: Optional[Callable[[], nn.Module]] = None
+
+    @nn.compact
+    def __call__(self, theta, context=None, t=None, deterministic=True):
+        """
+        theta:   (B, L)
+        context: (B, L+1)
+        t:       (B,) or (B,1)
+        """
+        x = theta
+        for i in range(self.num_layers):
+            x = ThetaContextTransformerBlock(
+                embed_dim=self.embed_dim,
+                num_heads=self.num_heads,
+                include_context_in_v=self.include_context_in_v,
+                dropout_rate=self.dropout_rate,
+                use_bias=self.use_bias,
+                feed_forward_ctor=self.feed_forward_ctor,
+                name=f"block_{i}"
+            )(x, context=context, t=t, deterministic=deterministic)
+        return x

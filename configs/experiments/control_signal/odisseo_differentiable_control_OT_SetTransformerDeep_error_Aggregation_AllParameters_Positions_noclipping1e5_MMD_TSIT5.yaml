@@ -68,7 +68,7 @@ strategy:
       target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transformfirst
       params:
         simulator:
-          target: sbisim.simulations.OdisseoSimulatorOT_AllParametersPositions_transformfirst_andlog
+          target: sbisim.simulations.OdisseoSimulatorOT_AllParametersPositions_transformfirst_andlog_TSIT5
         start_time: ${start_time}
 
         controlled_flow:
@@ -83,11 +83,11 @@ strategy:
         freeze: true
 
 training:
-  num_epochs: 30
+  num_epochs: 10
   num_steps_per_epoch: 2000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 5
+    patience: 2
 
 test: 
   active: True

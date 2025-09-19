@@ -7,6 +7,8 @@ from functools import partial
 from ...simulations import LotkaVolterraSimulator, SBISimulator, OdisseoSimulator
 from ...utils import instantiate_from_config
 import jax.numpy as jnp
+from jax.scipy.special import logsumexp
+
 import numpy as np
 
 from jax.lax import stop_gradient
@@ -875,12 +877,46 @@ class CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transf
 
     def NLL(self, theta_1, target):
 
+        # Define bin edges and create meshgrids
+        phi1_bins = jnp.linspace(-120, 70, 65)    # 64 bins
+        phi2_bins = jnp.linspace(-8, 2, 33)       # 32 bins
+        v1_bins = jnp.linspace(-2., 1.0, 65)      # 64 bins  
+        v2_bins = jnp.linspace(-0.10, 0.10, 33)   # 32 bins
+        R_bins = jnp.linspace(6, 20, 65)          # 64 bins
+        vR_bins = jnp.linspace(-250, 250, 33)     # 32 bins
+
+        # Create meshgrids for bin edges (not centers)
+        PHI1, PHI2 = jnp.meshgrid(phi1_bins, phi2_bins, indexing='ij')
+        V1, V2 = jnp.meshgrid(v1_bins, v2_bins, indexing='ij')
+        R_GRID, VR_GRID = jnp.meshgrid(R_bins, vR_bins, indexing='ij')
+
         simulator_rng = self.make_rng('simulator')
         # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
-        output, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+        stream, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
                                         rng=simulator_rng, deterministic=True, )  # noqa
 
-        return -1 * stream_likelihood_mean(model_stream=output, obs_stream=target, obs_errors=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 0.0001]))/1000.0
+        # take relevant projections from simulated stream
+        x_phi = stream[:, [1,2]]   # phi1, phi2
+        x_v   = stream[:, [4,5]]   # vphi1, vphi2
+        x_R   = stream[:, [0,3]]   # R, v_radial
+
+        # choose bandwidths (tune or use Silverman's rule)
+        bw_phi = jnp.array([2.0, 0.5])     # example: phi1=2deg, phi2=0.5deg
+        bw_v   = jnp.array([0.1, 0.01])    # example velocities
+        bw_R   = jnp.array([0.5, 20.0])    # example R and vR
+
+        # KDE densities on each meshgrid
+        dens_phi = kde2d_on_grid(x_phi, PHI1, PHI2, bw_phi)
+        dens_v   = kde2d_on_grid(x_v, V1, V2, bw_v)
+        dens_R   = kde2d_on_grid(x_R, R_GRID, VR_GRID, bw_R)
+
+        dens_phi_target = kde2d_on_grid(target[:, [1,2]], PHI1, PHI2, bw_phi)
+        dens_v_target   = kde2d_on_grid(target[:, [4,5]], V1, V2, bw_v)
+        dens_R_target   = kde2d_on_grid(target[:, [0,3]], R_GRID, VR_GRID, bw_R)
+
+        return jnp.exp(-0.1 * (loss_js(dens_phi_target, dens_phi) +
+                loss_js(dens_v_target, dens_v) +
+                loss_js(dens_R_target, dens_R)))
 
 
     def forward_flow(self, t, theta, context, train=False):
@@ -896,7 +932,7 @@ class CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transf
         if self.freeze:
             flow_pred = stop_gradient(flow_pred)
 
-        print(theta.shape)
+        # print(theta.shape)
 
         theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
         
@@ -915,10 +951,12 @@ class CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transf
         # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
         grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
         loss, grad = grad_fn(theta_1, context)
-        print('loss:', loss)
-        print('grad:', grad)
+        # print('loss:', loss)
+        # print('grad:', grad)
 
-        grad = grad / 1_00
+        # grad = grad / jnp.linalg.norm(grad, axis=1, keepdims=True)
+
+        # print('normalized grad:', grad)
 
         loss = jnp.expand_dims(loss, axis=1)
 
@@ -927,8 +965,9 @@ class CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transf
 
         output = self.aggregration_impl(output)
 
-        output = jnp.concatenate([flow_pred, t, output], axis=1)
-        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        # output = jnp.concatenate([flow_pred, t, output], axis=1)
+        drift = flow_pred + self.controlled_flow_impl(theta=flow_pred, context=output, t=t) # noqa
+        # drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
         # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention
         
         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
@@ -1239,3 +1278,60 @@ def stream_likelihood_test(model_stream, obs_stream, obs_errors, ):
     logL_values = jax.vmap(obs_log_prob)(obs_stream, jnp.repeat(obs_errors, obs_stream.shape[0]).reshape(-1, 6))
     return jnp.mean(logL_values)
 
+
+# Utility: ensure non-neg and avoid zeros
+def _safe(d, eps=1e-12):
+    return jnp.clip(d, a_min=eps)
+
+
+def loss_js(d_target, d_sim):
+    p = _safe(d_target) / jnp.sum(_safe(d_target))
+    q = _safe(d_sim)   / jnp.sum(_safe(d_sim))
+    m = 0.5 * (p + q)
+    return 0.5 * (jnp.sum(p * (jnp.log(p) - jnp.log(m))) + jnp.sum(q * (jnp.log(q) - jnp.log(m))))
+
+
+def kde2d_on_grid(x, grid_x, grid_y, bandwidth):
+    """
+    Evaluate 2D Gaussian KDE on a meshgrid.
+
+    Parameters
+    ----------
+    x : (N, 2) 
+        Simulation data points in 2D (e.g., (phi1, phi2)).
+    grid_x, grid_y : (Nx, Ny)
+        Meshgrid arrays defining grid coordinates where density is evaluated.
+    bandwidth : float or (2,)
+        Bandwidth per dimension (std dev of Gaussian kernel).
+
+    Returns
+    -------
+    dens : (Nx, Ny) 
+        KDE density evaluated at grid points.
+    """
+    N, d = x.shape
+    assert d == 2
+
+    # Flatten grid to (G, 2)
+    grid_points = jnp.stack([grid_x.ravel(), grid_y.ravel()], axis=1)  # (G,2)
+
+    # Differences (G, N, 2)
+    diff = grid_points[:, None, :] - x[None, :, :]
+
+    # Handle bandwidth
+    bw = jnp.atleast_1d(bandwidth)
+    if bw.shape == (1,):
+        bw = jnp.repeat(bw, 2)
+    var = bw**2
+
+    # Mahalanobis distance per dimension
+    sq = (diff**2) / var  # (G,N,2)
+
+    # log kernel for each (gridpoint, datapoint)
+    logk = -0.5 * jnp.sum(sq, axis=-1) - 0.5*jnp.sum(jnp.log(2*jnp.pi*var))
+
+    # logsumexp over datapoints
+    log_dens = logsumexp(logk, axis=1) - jnp.log(N)
+
+    dens = jnp.exp(log_dens).reshape(grid_x.shape)
+    return dens

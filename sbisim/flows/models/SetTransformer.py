@@ -505,12 +505,12 @@ class SetTransformerPosition(nn.Module, FlaxModelMixin, ConfigMixin):
         # print(encoder_hidden_states.shape)
         encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
 
-        print("timesteps", timesteps.shape)
+        # print("timesteps", timesteps.shape)
         timesteps = jnp.reshape(timesteps, -1)
 
         t_emb = self.time_proj(timesteps)
         t_emb = self.time_embedding(t_emb)
-        print("t_emb", t_emb.shape)
+        # print("t_emb", t_emb.shape)
 
         # 1. swap sample (features) and encoder_hidden_states (conditioning for images)
         temp_ = sample
@@ -816,7 +816,7 @@ class SetTransformerPosition_newprior(nn.Module, FlaxModelMixin, ConfigMixin):
 
     def normalization(self, x):
 
-        normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud + 1e-10)
+        normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud )
 
         return normalized_x
 
@@ -853,12 +853,12 @@ class SetTransformerPosition_newprior(nn.Module, FlaxModelMixin, ConfigMixin):
         # print(encoder_hidden_states.shape)
         encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
 
-        print("timesteps", timesteps.shape)
+        # print("timesteps", timesteps.shape)
         timesteps = jnp.reshape(timesteps, -1)
 
         t_emb = self.time_proj(timesteps)
         t_emb = self.time_embedding(t_emb)
-        print("t_emb", t_emb.shape)
+        # print("t_emb", t_emb.shape)
 
         # 1. swap sample (features) and encoder_hidden_states (conditioning for images)
         temp_ = sample
