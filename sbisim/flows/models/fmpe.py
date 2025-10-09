@@ -335,7 +335,7 @@ class DenseResidualNet(nn.Module):
     in_dim: int
     context_dim: int = 0
     activation_fn: str = 'elu'
-    use_layer_norm: bool = False  
+    use_layer_norm: bool = False
 
     def setup(self):
 
@@ -346,12 +346,12 @@ class DenseResidualNet(nn.Module):
                                  bias_init=pytorch_bias_init(self.in_dim))
          # Add input normalization
         if self.use_layer_norm:
-            self.input_norm = nn.LayerNorm( epsilon=1e-4)
+            self.input_norm = nn.BatchNorm()
 
         for hidden_dim, hidden_dim_next in zip(self.hidden_dims, list(self.hidden_dims[1:]) + [self.out_dim]):
             blocks.append(DenseResidualBlocks(hidden_dim, context_dim = self.context_dim,
                                               activation_fn=self.activation_fn,
-                                              use_layer_norm=self.use_layer_norm))
+                                              use_layer_norm=False))
             if hidden_dim != hidden_dim_next:
                 projections.append(nn.Dense(hidden_dim_next, use_bias=True,
                                            kernel_init=lecun_uniform(),
@@ -364,15 +364,11 @@ class DenseResidualNet(nn.Module):
 
     def __call__(self, theta, context = None, train=True):
 
-        print('theta before norm', theta)
 
         # Normalize input after first dense layer
         if self.use_layer_norm:
-            theta = self.input_norm(theta,)
+            theta = self.input_norm(theta, use_running_average=not train)
             # theta = nn.BatchNorm(use_running_average=not train)(theta)
-
-        print('theta after norm', theta)
-
     
         x = self.dense_in(theta)
 

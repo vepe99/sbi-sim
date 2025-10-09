@@ -5,17 +5,17 @@ dim_flow: 13
 dim_conditioning: 5
 dim_network: 4
 
-batch_size: 100
+batch_size: 400
 
 weighting: "one"
 loss_type: "fm_ot"
 scaling_type: "none"
 
-learning_rate: 0.0005
+learning_rate: 0.001
 
 data:
-  target: sbisim.data.benchmarks.OdisseoOTAllParametersPosition_newprior
-  _file: configs/datasets/benchmarks/10e4_dataset.yaml
+  target: sbisim.data.benchmarks.OdisseoOTAllParametersPosition_uniformprior
+  _file: configs/datasets/benchmarks/20e5_dataset_morevalidation.yaml
   normalization: True
 
 strategy:
@@ -51,14 +51,13 @@ strategy:
           params:
             sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.SetTransformer.SetTransformerPosition_newprior
+      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPosition_uniformprior
       params:
-        import_samples: 10
         dim_flow: ${dim_flow}
         sample_size: 1000
-        N_dim: 64
-        N_head: 4
-        depth: 8
+        N_dim: 128
+        N_head: 8
+        depth: 6
 
 training:
   num_epochs: 500
@@ -70,24 +69,24 @@ training:
 test:
   active: True
   tests:
-    # ranks:
-    #     target: sbisim.callbacks.C2ST_OT_AllParametersPositions_newprior
-    #     params:
-    #       save_every: 200
-    #       savedir: ${runtime.logdir}
-    #       num_total_samples: 100
-    #       observation_idx: 500
-    # batch_size: ${batch_size}
     true_sampling:
-      target: sbisim.callbacks.c2st.C2ST_OT_AllParametersPositions_newprior_TrueSimulation
+      target: sbisim.callbacks.c2st.C2ST_OT_AllParametersPositions_uniformprior_TrueSimulation
       params:
         savedir: ${runtime.logdir}
         num_total_samples: 5000
         batch_size: ${batch_size}
+    ranks:
+      target: sbisim.callbacks.C2ST_OT_AllParametersPositions_uniformprior
+      params:
+        save_every: 200
+        savedir: ${runtime.logdir}
+        num_total_samples: 500
+        observation_idx: 500
+        batch_size: ${batch_size}
 
 patience: 5
 optimization:
-  _file: configs/optimization/adam_reduce_lr.yaml
+  _file: configs/optimization/adamw_reduce_lr.yaml
 
 callbacks:
   checkpoint:

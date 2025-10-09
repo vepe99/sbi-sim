@@ -976,6 +976,318 @@ class CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transf
         return drift, output
     
 
+class CorrectorDifferentiableSimulatorOdisseo_uniformprior_jsloss(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+    
+        code_length = 10.0 * u.kpc
+        code_mass = 1e4 * u.Msun
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+
+        # Define bin edges and create meshgrids
+        phi1_bins = jnp.linspace(-120, 70, 65)    # 64 bins
+        phi2_bins = jnp.linspace(-8, 2, 33)       # 32 bins
+        v1_bins = jnp.linspace(-2., 1.0, 65)      # 64 bins  
+        v2_bins = jnp.linspace(-0.10, 0.10, 33)   # 32 bins
+        R_bins = jnp.linspace(6, 20, 65)          # 64 bins
+        vR_bins = jnp.linspace(-250, 250, 33)     # 32 bins
+
+        # Create meshgrids for bin edges (not centers)
+        self.PHI1, self.PHI2 = jnp.meshgrid(phi1_bins, phi2_bins, indexing='ij')
+        self.V1, self.V2 = jnp.meshgrid(v1_bins, v2_bins, indexing='ij')
+        self.R_GRID, self.VR_GRID = jnp.meshgrid(R_bins, vR_bins, indexing='ij')
+
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+
+
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        stream, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, )  # noqa
+
+        # take relevant projections from simulated stream
+        x_phi = stream[:, [1,2]]   # phi1, phi2
+        x_v   = stream[:, [4,5]]   # vphi1, vphi2
+        x_R   = stream[:, [0,3]]   # R, v_radial
+
+        # choose bandwidths (tune or use Silverman's rule)
+        bw_phi = jnp.array([2.0, 0.5])     # example: phi1=2deg, phi2=0.5deg
+        bw_v   = jnp.array([0.1, 0.01])    # example velocities
+        bw_R   = jnp.array([0.5, 20.0])    # example R and vR
+
+        # KDE densities on each meshgrid
+        dens_phi = kde2d_on_grid(x_phi, self.PHI1, self.PHI2, bw_phi)
+        dens_v   = kde2d_on_grid(x_v, self.V1, self.V2, bw_v)
+        dens_R   = kde2d_on_grid(x_R, self.R_GRID, self.VR_GRID, bw_R)
+
+        dens_phi_target = kde2d_on_grid(target[:, [1,2]], self.PHI1, self.PHI2, bw_phi)
+        dens_v_target   = kde2d_on_grid(target[:, [4,5]], self.V1, self.V2, bw_v)
+        dens_R_target   = kde2d_on_grid(target[:, [0,3]], self.R_GRID, self.VR_GRID, bw_R)
+
+        return jnp.exp(-0.1 * (loss_js(dens_phi_target, dens_phi) +
+                loss_js(dens_v_target, dens_v) +
+                loss_js(dens_R_target, dens_R)))
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        # print(theta.shape)
+        theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        loss, grad = grad_fn(theta_1, context)
+        print('loss:', loss)
+        print('grad:', grad)
+
+        # grad = grad / jnp.linalg.norm(grad, axis=1, keepdims=True)
+
+        loss = jnp.expand_dims(loss, axis=1)
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+        output = self.aggregration_impl(output)
+
+        output = jnp.concatenate([flow_pred, t, output], axis=1)
+        # drift = flow_pred + self.controlled_flow_impl(theta=flow_pred, context=output, t=t) # noqa
+        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output
+
+class CorrectorDifferentiableSimulatorOdisseoAggregationNormalizedNewLoss_transformfirst_nstep(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+        self.low=jnp.array([0.5,
+                            10**3., 
+                            1/4 * 0.008,
+                            10**log10(1/4 * 4.3683325e11), 
+                            1/4 * 16,
+                            10**log10(1/4 *68_193_902_782.346756),
+                            1/4 * 3,
+                            10.0, #x
+                            0.1, #y
+                            6.0, #z
+                            90.0, #vx
+                            -280.0, #vy
+                            -120.0]) #vz
+        self.high=jnp.array([5, 
+                             10**4.5, 
+                             2 * 0.008, 
+                             10**log10(2 * 4.3683325e11),
+                             2 * 16,
+                             10**log10(2 * 68_193_902_782.346756),
+                             2 * 3,
+                             14.0, #x
+                             2.5,  #y
+                             8.0,  #z
+                             115.0, #vx
+                             -230.0, #vy
+                             -80.0]) #vz
+        code_length = 10.0 * u.kpc
+        code_mass = 1e4 * u.Msun
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+        self.mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
+        self.std_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position/preprocess/mean_std_1e5_pointcloud.npz')['std_x']
+        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_newprior/preprocess/mean_std_1e5_parameter.npz')['mean_theta']
+        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_newprior/preprocess/mean_std_1e5_parameter.npz')['std_theta']
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+
+        # Define bin edges and create meshgrids
+        phi1_bins = jnp.linspace(-120, 70, 65)    # 64 bins
+        phi2_bins = jnp.linspace(-8, 2, 33)       # 32 bins
+        v1_bins = jnp.linspace(-2., 1.0, 65)      # 64 bins  
+        v2_bins = jnp.linspace(-0.10, 0.10, 33)   # 32 bins
+        R_bins = jnp.linspace(6, 20, 65)          # 64 bins
+        vR_bins = jnp.linspace(-250, 250, 33)     # 32 bins
+
+        # Create meshgrids for bin edges (not centers)
+        PHI1, PHI2 = jnp.meshgrid(phi1_bins, phi2_bins, indexing='ij')
+        V1, V2 = jnp.meshgrid(v1_bins, v2_bins, indexing='ij')
+        R_GRID, VR_GRID = jnp.meshgrid(R_bins, vR_bins, indexing='ij')
+
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        stream, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, )  # noqa
+
+        # take relevant projections from simulated stream
+        x_phi = stream[:, [1,2]]   # phi1, phi2
+        x_v   = stream[:, [4,5]]   # vphi1, vphi2
+        x_R   = stream[:, [0,3]]   # R, v_radial
+
+        # choose bandwidths (tune or use Silverman's rule)
+        bw_phi = jnp.array([2.0, 0.5])     # example: phi1=2deg, phi2=0.5deg
+        bw_v   = jnp.array([0.1, 0.01])    # example velocities
+        bw_R   = jnp.array([0.5, 20.0])    # example R and vR
+
+        # KDE densities on each meshgrid
+        dens_phi = kde2d_on_grid(x_phi, PHI1, PHI2, bw_phi)
+        dens_v   = kde2d_on_grid(x_v, V1, V2, bw_v)
+        dens_R   = kde2d_on_grid(x_R, R_GRID, VR_GRID, bw_R)
+
+        dens_phi_target = kde2d_on_grid(target[:, [1,2]], PHI1, PHI2, bw_phi)
+        dens_v_target   = kde2d_on_grid(target[:, [4,5]], V1, V2, bw_v)
+        dens_R_target   = kde2d_on_grid(target[:, [0,3]], R_GRID, VR_GRID, bw_R)
+
+        return jnp.exp(-0.1 * (loss_js(dens_phi_target, dens_phi) +
+                loss_js(dens_v_target, dens_v) +
+                loss_js(dens_R_target, dens_R)))
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        n_steps = 3
+        dt = (1 - t[:, 0]) / n_steps
+        
+    
+        # def transform_to_simulation_units(theta_normalized):
+        #     """Transform normalized theta to simulation units"""
+        #     theta_sim = theta_normalized * self.std_X + self.mean_X
+        #     theta_sim = theta_sim.at[:, 0].set(theta_sim[:, 0] * u.Gyr.to(self.code_units.code_time))
+        #     theta_sim = theta_sim.at[:, 1].set(jnp.log10(theta_sim[:, 1] * u.Msun.to(self.code_units.code_mass)))
+        #     theta_sim = theta_sim.at[:, 2].set(theta_sim[:, 2] * u.kpc.to(self.code_units.code_length))
+        #     theta_sim = theta_sim.at[:, 3].set(jnp.log10(theta_sim[:, 3] * u.Msun.to(self.code_units.code_mass)))
+        #     theta_sim = theta_sim.at[:, 4].set(theta_sim[:, 4] * u.kpc.to(self.code_units.code_length))
+        #     theta_sim = theta_sim.at[:, 5].set(theta_sim[:, 5] * u.Msun.to(self.code_units.code_mass))
+        #     theta_sim = theta_sim.at[:, 6].set(theta_sim[:, 6] * u.kpc.to(self.code_units.code_length))
+        #     return theta_sim
+
+        # context = context * self.std_pointcloud + self.mean_pointcloud
+
+        def integration_step(carry, step_idx):
+            theta_current, t_current = carry
+            
+            # Get flow prediction
+            flow_step = self.model(t_current, theta_current, context, train=train)
+            if self.freeze:
+                flow_step = stop_gradient(flow_step)
+            
+            # Euler step
+            theta_next = theta_current + jnp.einsum('ab,a->ab', flow_step, dt)
+            # jax.debug.print('{theta_next}', theta_next=theta_next)
+            
+            # Transform for gradient calculation
+            # theta_sim = transform_to_simulation_units(theta_next)
+            theta_sim = theta_next
+            # jax.debug.print('{theta_sim}', theta_sim=theta_sim)
+            
+            # Calculate gradient at this step
+            grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+            loss_step, grad_step = grad_fn(theta_sim, context)
+
+            # jax.debug.print('{loss_step}', loss_step=loss_step)
+            # jax.debug.print('{grad_step}', grad_step=grad_step)
+
+            # Update time
+            t_next = t_current.at[:, 0].add(dt)
+            
+            return (theta_next, t_next), (loss_step, grad_step)
+
+        # Initialize and run integration
+        initial_carry = (theta, t)
+        final_carry, (all_losses, all_gradients) = jax.lax.scan(
+            integration_step, 
+            initial_carry, 
+            jnp.arange(n_steps)
+        )
+
+        # Calculate mean gradient and loss
+        grad = jnp.mean(all_gradients, axis=0)  # Mean over steps
+        loss = jnp.mean(all_losses, axis=0)     # Mean over steps
+        # jax.debug.print('{loss}', loss=loss)
+        # jax.debug.print('{grad}', grad=grad)
+
+        loss = jnp.expand_dims(loss, axis=1)
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+        output = self.aggregration_impl(output)
+
+        output = jnp.concatenate([flow_pred, t, output], axis=1)
+        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+
+
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output
+    
+
 class CorrectorDifferentiableSimulatorOdisseoTest(nn.Module):
     """
     Corrector model for Odisseo simulator, differentiable version.
@@ -1335,3 +1647,117 @@ def kde2d_on_grid(x, grid_x, grid_y, bandwidth):
 
     dens = jnp.exp(log_dens).reshape(grid_x.shape)
     return dens
+
+
+
+class CorrectorDifferentiableSimulatorOdisseo_orbit_fitting(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+        code_length = 10.0 * u.kpc
+        code_mass = 1e4 * u.Msun
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior_TSIT5/preprocess/mean_std_2e5_parameter.npz')['mean_theta']
+        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior_TSIT5/preprocess/mean_std_2e5_parameter.npz')['std_theta']
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+
+
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        stream_coordinate_com, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, )  # noqa
+
+        mask = target[:, 1]>stream_coordinate_com[0, :, 1]
+        interp_stream_track = jnp.interp(
+            target[:, 1], 
+            stream_coordinate_com[:30, :, 1].ravel(), 
+            stream_coordinate_com[:30, :, 2].ravel()
+        )
+        
+        # Calculate residuals only for valid points
+        residuals = jnp.where(mask, target[:, 2] - interp_stream_track, 0.0)
+        n_valid = jnp.sum(mask)  # Number of valid data points
+        sigma = 0.1  # Assumed observational uncertainty
+        # Gaussian log-likelihood: ln L = -0.5 * [chi2 + N*ln(2π*σ²)]
+        chi2 = jnp.sum(residuals**2) / sigma**2
+        log_likelihood = -0.5 * (chi2 + n_valid * jnp.log(2 * jnp.pi * sigma**2))
+        
+        return -log_likelihood
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        # print(theta.shape)
+
+        theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+        
+
+        theta_1 = theta_1 * self.std_X + self.mean_X
+        theta_1 = theta_1.at[:, 0].set(theta_1[:, 0] * u.Gyr.to(self.code_units.code_time))
+        theta_1 = theta_1.at[:, 1].set((10**theta_1[:, 1]) * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[:, 2].set(theta_1[:, 2] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[:, 3].set((10**theta_1[:, 3]) * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[:, 4].set(theta_1[:, 4] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[:, 5].set((10**theta_1[:, 5]) * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[:, 6].set(theta_1[:, 6] * u.kpc.to(self.code_units.code_length))
+
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        loss, grad = grad_fn(theta_1, context)
+        # print('loss:', loss)
+        # print('grad:', grad)
+
+        # grad = grad / jnp.linalg.norm(grad, axis=1, keepdims=True)
+
+        # print('normalized grad:', grad)
+
+        loss = jnp.expand_dims(loss, axis=1)
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+        output = self.aggregration_impl(output)
+
+        output = jnp.concatenate([flow_pred, t, output], axis=1)
+        # drift = flow_pred + self.controlled_flow_impl(theta=flow_pred, context=output, t=t) # noqa
+        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+        # drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=context, loss_grad=output, train=train)  #this is for the conv_2d_cross_attention
+        
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output

@@ -56,28 +56,28 @@ strategy:
         import_samples: 10
         dim_flow: ${dim_flow}
         sample_size: 1000
-        N_dim: 64
-        N_head: 4
-        depth: 8
+        N_dim: 256
+        N_head: 8
+        depth: 4
 
 training:
-  num_epochs: 500
+  num_epochs: 250
   num_steps_per_epoch: 6000
   batch_size: ${batch_size}
   early_stopping:
-    patience: 50
+    patience: 20
 
 test:
   active: True
   tests:
-    # ranks:
-    #     target: sbisim.callbacks.C2ST_OT_AllParametersPositions_newprior
-    #     params:
-    #       save_every: 200
-    #       savedir: ${runtime.logdir}
-    #       num_total_samples: 100
-    #       observation_idx: 500
-    # batch_size: ${batch_size}
+    ranks:
+      target: sbisim.callbacks.C2ST_OT_AllParametersPositions_newprior
+      params:
+        save_every: 200
+        savedir: ${runtime.logdir}
+        num_total_samples: 100
+        observation_idx: 500
+        batch_size: ${batch_size}
     true_sampling:
       target: sbisim.callbacks.c2st.C2ST_OT_AllParametersPositions_newprior_TrueSimulation
       params:

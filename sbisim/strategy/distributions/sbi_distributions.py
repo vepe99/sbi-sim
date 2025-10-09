@@ -71,7 +71,7 @@ def get_odisseo_prior_AllParameters():
     #     shape=(4,)
     # )
     return UniformBase(
-        low = -1 * jnp.ones(7),
-        high = jnp.ones(7),
-        shape=(7,)
+        low = -1 * jnp.ones(13),
+        high = jnp.ones(13),
+        shape=(13,)
     )
