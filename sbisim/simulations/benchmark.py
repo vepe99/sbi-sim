@@ -1401,6 +1401,319 @@ class OdisseoSimulatorOT_AllParametersPositions_orbitfitting_TSIT5(SBISimulator)
         samples = samples_y
         return samples, rng
 
+
+
+class OdisseoSimulatorOT_AllParameters_FixPosition_orbitfitting_TSIT5(SBISimulator):
+
+    code_length = 10.0 * u.kpc
+    code_mass = 1e4 * u.Msun
+    code_time = 3 * u.Gyr
+    code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )      
+
+    def run_simulation(self, params):
+        params = 10**params
+        params = params.at[0].set(params[0] * u.Msun.to(self.code_units.code_mass))
+        params = params.at[1].set(params[1] * u.kpc.to(self.code_units.code_length))
+        params = params.at[2].set(params[2] * u.Msun.to(self.code_units.code_mass))
+        params = params.at[3].set(params[3] * u.kpc.to(self.code_units.code_length))
+        params = params.at[4].set(params[4] * u.kpc.to(self.code_units.code_length))
+        params = params.at[5].set(params[5] * u.Msun.to(self.code_units.code_mass))
+        params = params.at[6].set(params[6] * u.kpc.to(self.code_units.code_length))
+
+        @jit
+        def assign_params_integrate_projection(t_end):
+            new_params = SimulationParams(t_end = t_end,  
+                                    Plummer_params= PlummerParams(Mtot=(10**4.05 * u.Msun).to(self.code_units.code_mass).value,
+                                                                    a=(8 * u.pc).to(self.code_units.code_length).value),
+                                    NFW_params = NFWParams(Mvir=params[0],
+                                                        r_s= params[1] ),
+                                    MN_params = MNParams(M = params[2] ,
+                                                        a = params[3] ,
+                                                        b = params[4]),
+                                    PSP_params= PSPParams(M = params[5],
+                                                            alpha = 1.8, 
+                                                            r_c = params[6],),
+                                    G = self.code_units.G, )
+            mass_com = jnp.array([new_params.Plummer_params.Mtot])
+            snapshots = time_integration(initial_state_com, mass_com, config=self.config_com, params=new_params)
+            stream_coordinate = jax.vmap(projection_on_GD1, in_axes=(0, None))(snapshots.states, self.code_units)
+            return stream_coordinate
+
+        t_end_mag = 0.2 * u.Gyr.to(self.code_units.code_time)
+        t_end_array = jnp.array([-t_end_mag, t_end_mag])  # backward, forward
+        
+        
+        #this is the final position of the cluster, we need to integrate backwards in time 
+        pos_com_final = jnp.array([[11.8, 0.79, 6.4]]) * u.kpc.to(self.code_units.code_length)
+        vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(self.code_units.code_velocity)
+
+        #we construmt the initial state of the com 
+        initial_state_com = construct_initial_state(pos_com_final, vel_com_final,)
+        #we run the simulation backwards in time for the center of mass
+        # vmap over both parameters
+        stream_coordinate_com = jax.vmap(assign_params_integrate_projection)(t_end_array)
+
+        return stream_coordinate_com
+    
+    def add_noise(self, x,rng, noise_std=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 1e-3])):
+        x_noise = x + noise_std * random.normal(key=rng, shape=(x.shape))
+        return x_noise
+
+
+    def __init__(self, N_particles: int = 1000):
+        super().__init__()
+        self.N_particles = N_particles
+        self.config_sim = SimulationConfig(N_particles = self.N_particles,
+                            return_snapshots = True, 
+                            num_timesteps = 1000, 
+                            external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
+                            acceleration_scheme = DIRECT_ACC_MATRIX,
+                            softening = (0.1 * u.pc).to(self.code_units.code_length).value,
+                            integrator = DIFFRAX_BACKEND,
+                            fixed_timestep = False,
+                            diffrax_solver = TSIT5,
+                            ) #default values
+        #the center of mass needs to be integrated backwards in time first 
+        self.config_com = self.config_sim._replace(N_particles=1,)
+
+    @partial(jit, static_argnums=(0, 2, 4, 5)) 
+    def __call__(self, params,  num_simulations, rng, 
+                 normalize=True, deterministic=False, ):
+            
+        batch_size = params.shape[0]
+
+        X = params
+        Y = self.run_simulation(params)
+        # Y = jnp.repeat(Y, batch_size)
+        if deterministic:
+            pass
+        else:
+            Y =  self.add_noise(x=Y, rng=rng)
+
+        samples_x = X
+        samples_y = Y
+
+
+        samples = samples_y
+        return samples, rng
+
+class OdisseoSimulatorOT_AllParameters_FixPosition_orbitfitting_pointcloud_TSIT5(SBISimulator):
+
+    code_length = 10.0 * u.kpc
+    code_mass = 1e4 * u.Msun
+    code_time = 3 * u.Gyr
+    code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )      
+
+    def run_simulation(self, params, rng, stream):
+        params_samples = SimulationParams(t_end = 3 * u.Gyr.to(self.code_units.code_time),  
+                                    Plummer_params= PlummerParams(Mtot=(10**4.05 * u.Msun).to(self.code_units.code_mass).value,
+                                                                    a=(8 * u.pc).to(self.code_units.code_length).value),
+                                    NFW_params = NFWParams(Mvir=params[0],
+                                                        r_s= params[1] ),
+                                    MN_params = MNParams(M = params[2] ,
+                                                        a = params[3] ,
+                                                        b = params[4]),
+                                    PSP_params= PSPParams(M = params[5],
+                                                            alpha = 1.8, 
+                                                            r_c = params[6],),
+                                    G = self.code_units.G, )
+
+        
+        mass_com = jnp.array([params_samples.Plummer_params.Mtot])
+        #this is the final position of the cluster, we need to integrate backwards in time 
+        pos_com_final = jnp.array([[11.8, 0.79, 6.4]]) * u.kpc.to(self.code_units.code_length)
+        vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(self.code_units.code_velocity)
+        #we construmt the initial state of the com 
+        initial_state_com = construct_initial_state(pos_com_final, vel_com_final,)
+
+        if not stream: 
+            @jit
+            def assign_params_integrate_projection(t_end):
+                new_params = params_samples._replace(t_end=t_end)
+                
+                snapshots = time_integration(initial_state_com, mass_com, config=self.config_com, params=new_params)
+                stream_coordinate = jax.vmap(projection_on_GD1, in_axes=(0, None))(snapshots.states, self.code_units)
+                return stream_coordinate
+            t_end_mag = 0.2 * u.Gyr.to(self.code_units.code_time)
+            t_end_array = jnp.array([-t_end_mag, t_end_mag])  # backward, forward
+            #we run the simulation backwards in time for the center of mass
+            # vmap over both parameters to get the orbti in Deltat=0.2
+            stream_coordinate_com = jax.vmap(assign_params_integrate_projection)(t_end_array)
+            return stream_coordinate_com
+        else:
+            #we run the simulation backwards in time for the center of mass
+            final_state_com = time_integration(initial_state_com, mass_com, config=self.config_com_stream, params=params_samples)
+            #we calculate the final position and velocity of the center of mass
+            pos_com = final_state_com[:, 0]
+            vel_com = final_state_com[:, 1]
+
+            #we construct the initial state of the Plummer sphere
+            positions, velocities, mass = Plummer_sphere(key=rng, params=params_samples, config=self.config_sim)
+            #we add the center of mass position and velocity to the Plummer sphere particles
+            positions = positions + pos_com
+            velocities = velocities + vel_com
+            #initialize the initial state
+            initial_state_stream = construct_initial_state(positions, velocities, )
+            #run the simulation
+            final_state = time_integration(initial_state_stream, mass, config=self.config_sim, params=params_samples)
+
+            #projection on the GD1 stream
+            stream_projection = projection_on_GD1(final_state, code_units=self.code_units,)
+
+            return stream_projection
+    
+    def add_noise(self, x,rng, noise_std=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 1e-3])):
+        x_noise = x + noise_std * random.normal(key=rng, shape=(x.shape))
+        return x_noise
+
+    
+
+    def __init__(self, N_particles: int = 1000):
+        super().__init__()
+        self.N_particles = N_particles
+        self.config_sim = SimulationConfig(N_particles = self.N_particles,
+                            return_snapshots = False, 
+                            num_timesteps = 1000, 
+                            external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
+                            acceleration_scheme = DIRECT_ACC_MATRIX,
+                            softening = (0.1 * u.pc).to(self.code_units.code_length).value,
+                            integrator = DIFFRAX_BACKEND,
+                                                    fixed_timestep = False,
+                                                    diffrax_solver = TSIT5,     
+                            ) #default values
+        #the center of mass needs to be integrated backwards in time first 
+        self.config_com = self.config_sim._replace(N_particles=1,
+                                                 return_snapshots = True,)
+                                                  
+        self.config_com_stream = self.config_sim._replace(N_particles=1,)
+
+    @partial(jit, static_argnums=(0, 2, 4, 5, 6)) 
+    def __call__(self, params,  num_simulations, rng, 
+                 normalize=True, deterministic=False, stream=False ):
+            
+        batch_size = params.shape[0]
+
+        X = params
+        Y = self.run_simulation(params, rng, stream)
+        if deterministic:
+            pass
+        else:
+            Y =  self.add_noise(x=Y, rng=rng)
+
+        samples_x = X
+        samples_y = Y
+    
+        return samples_y, rng
+
+
+class OdisseoSimulatorOT_AllParametersPositions_fixtime_orbitfitting_pointcloud_TSIT5(SBISimulator):
+
+    code_length = 10.0 * u.kpc
+    code_mass = 1e4 * u.Msun
+    code_time = 3 * u.Gyr
+    code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )      
+
+    def run_simulation(self, params, rng, stream):
+        params_samples = SimulationParams(t_end = 3 * u.Gyr.to(self.code_units.code_time),  
+                                    Plummer_params= PlummerParams(Mtot=(10**4.05 * u.Msun).to(self.code_units.code_mass).value,
+                                                                    a=(8 * u.pc).to(self.code_units.code_length).value),
+                                    NFW_params = NFWParams(Mvir=params[0],
+                                                        r_s= params[1] ),
+                                    MN_params = MNParams(M = params[2] ,
+                                                        a = params[3] ,
+                                                        b = params[4]),
+                                    PSP_params= PSPParams(M = params[5],
+                                                            alpha = 1.8, 
+                                                            r_c = params[6],),
+                                    G = self.code_units.G, )
+
+        
+        mass_com = jnp.array([params_samples.Plummer_params.Mtot])
+        #this is the final position of the cluster, we need to integrate backwards in time 
+        pos_com_final = jnp.array([[params[7], params[8], params[9]]]) 
+        vel_com_final = jnp.array([[params[10], params[11], params[12]]]) 
+        #we construmt the initial state of the com 
+        initial_state_com = construct_initial_state(pos_com_final, vel_com_final,)
+
+        if not stream: 
+            @jit
+            def assign_params_integrate_projection(t_end):
+                new_params = params_samples._replace(t_end=t_end)
+                
+                snapshots = time_integration(initial_state_com, mass_com, config=self.config_com, params=new_params)
+                stream_coordinate = jax.vmap(projection_on_GD1, in_axes=(0, None))(snapshots.states, self.code_units)
+                return stream_coordinate
+            t_end_mag = 0.2 * u.Gyr.to(self.code_units.code_time)
+            t_end_array = jnp.array([-t_end_mag, t_end_mag])  # backward, forward
+            #we run the simulation backwards in time for the center of mass
+            # vmap over both parameters to get the orbti in Deltat=0.2
+            stream_coordinate_com = jax.vmap(assign_params_integrate_projection)(t_end_array)
+            return stream_coordinate_com
+        else:
+            #we run the simulation backwards in time for the center of mass
+            final_state_com = time_integration(initial_state_com, mass_com, config=self.config_com_stream, params=params_samples)
+            #we calculate the final position and velocity of the center of mass
+            pos_com = final_state_com[:, 0]
+            vel_com = final_state_com[:, 1]
+
+            #we construct the initial state of the Plummer sphere
+            positions, velocities, mass = Plummer_sphere(key=rng, params=params_samples, config=self.config_sim)
+            #we add the center of mass position and velocity to the Plummer sphere particles
+            positions = positions + pos_com
+            velocities = velocities + vel_com
+            #initialize the initial state
+            initial_state_stream = construct_initial_state(positions, velocities, )
+            #run the simulation
+            final_state = time_integration(initial_state_stream, mass, config=self.config_sim, params=params_samples)
+
+            #projection on the GD1 stream
+            stream_projection = projection_on_GD1(final_state, code_units=self.code_units,)
+
+            return stream_projection
+    
+    def add_noise(self, x,rng, noise_std=jnp.array([0.25, 0.001, 0.15, 5., 0.1, 1e-3])):
+        x_noise = x + noise_std * random.normal(key=rng, shape=(x.shape))
+        return x_noise
+
+    
+
+    def __init__(self, N_particles: int = 1000):
+        super().__init__()
+        self.N_particles = N_particles
+        self.config_sim = SimulationConfig(N_particles = self.N_particles,
+                            return_snapshots = False, 
+                            num_timesteps = 1000, 
+                            external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
+                            acceleration_scheme = DIRECT_ACC_MATRIX,
+                            softening = (0.1 * u.pc).to(self.code_units.code_length).value,
+                            integrator = DIFFRAX_BACKEND,
+                                                    fixed_timestep = False,
+                                                    diffrax_solver = TSIT5,     
+                            ) #default values
+        #the center of mass needs to be integrated backwards in time first 
+        self.config_com = self.config_sim._replace(N_particles=1,
+                                                 return_snapshots = True,)
+                                                  
+        self.config_com_stream = self.config_sim._replace(N_particles=1,)
+
+    @partial(jit, static_argnums=(0, 2, 4, 5, 6)) 
+    def __call__(self, params,  num_simulations, rng, 
+                 normalize=True, deterministic=False, stream=False ):
+            
+        batch_size = params.shape[0]
+
+        X = params
+        Y = self.run_simulation(params, rng, stream)
+        if deterministic:
+            pass
+        else:
+            Y =  self.add_noise(x=Y, rng=rng)
+
+        samples_x = X
+        samples_y = Y
+    
+        return samples_y, rng
+
 class LotkaVolterraSimulator(SBISimulator):
 
     # dataset mean and std for the dataset generated with julia (lotka_volterra)

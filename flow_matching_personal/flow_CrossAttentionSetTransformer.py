@@ -302,8 +302,8 @@ class Flow(nn.Module, FlaxModelMixin, ConfigMixin):
     use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
-    mean_pointcloud = jnp.zeros((6,))
-    std_pointcloud = jnp.ones((6,))
+    mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_newprior/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
+    std_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_newprior/preprocess/mean_std_1e5_pointcloud.npz')['std_x']
 
     def init_weights(self, rng: jax.Array) -> FrozenDict:
         # initialize params by calling init with dummy inputs

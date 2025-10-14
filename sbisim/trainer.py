@@ -94,19 +94,45 @@ class TrainerModule:
 
     def pack_(self):
         self.strategy.bind(self.opt.get_params())
+        
+        # propagate batch_stats if scaled_model exists
+        if hasattr(self.strategy, "batch_stats") and self.strategy.batch_stats is not None:
+            if hasattr(self.strategy, "scaled_model") and self.strategy.scaled_model is not None:
+                self.strategy.scaled_model.batch_stats = self.strategy.batch_stats
+                # also create a `variables` dict for sampling
+                self.strategy.variables = {'params': self.strategy.params,
+                                        'batch_stats': self.strategy.batch_stats}
+
         return {'rng': self.callback_rng, 'strategy': self.strategy,
                 'train_loader': self.train_loader, 'val_loader': self.val_loader,
                 'ckpt': self.create_checkpoint()}
 
+
     def create_checkpoint(self):
-        return {
-                'state': self.opt.get_state(),
-                'global_step': self.global_step,
-                'metrics': {key: float(value) for key, value in self.metrics.items()},
-                'epoch': self.epoch,
-                'rng': self.rng,
-                'config': self.config
-                }
+        # return {
+        #         'state': self.opt.get_state(),
+        #         'global_step': self.global_step,
+        #         'metrics': {key: float(value) for key, value in self.metrics.items()},
+        #         'epoch': self.epoch,
+        #         'rng': self.rng,
+        #         'config': self.config
+        #         }
+        ckpt = {
+            'state': self.opt.get_state(),
+            'global_step': self.global_step,
+            'metrics': {key: float(value) for key, value in self.metrics.items()},
+            'epoch': self.epoch,
+            'rng': self.rng,
+            'config': self.config
+        }
+
+        # Save batch_stats only if present in the strategy
+        batch_stats = getattr(self.strategy, "batch_stats", None)
+        if batch_stats is not None:
+            ckpt["batch_stats"] = batch_stats
+
+        return ckpt
+
 
     def restore_from_checkpoint(self, checkpoint, type: str='latest'):
 
@@ -124,6 +150,13 @@ class TrainerModule:
                 self.global_step = ckpt['global_step']
                 self.epoch = ckpt['epoch']
                 self.rng = ckpt['rng']
+                # Restore batch_stats if present
+                # --- ADD THESE LINES ---
+                if "batch_stats" in ckpt and ckpt["batch_stats"] is not None:
+                    self.strategy.batch_stats = ckpt["batch_stats"]
+                    # propagate into scaled_model wrapper if present
+                    if hasattr(self.strategy, "scaled_model") and self.strategy.scaled_model is not None:
+                        self.strategy.scaled_model.batch_stats = ckpt["batch_stats"]
 
                 print(f"Restored from checkpoint {checkpoint} at global step {self.global_step}")
 
@@ -261,7 +294,14 @@ class TrainerModule:
         return logs
 
     def on_train_end(self, logs, *args, **kwargs):
+        # --- Propagate batch_stats from scaled_model to strategy ---
+        if hasattr(self.strategy, "scaled_model") and self.strategy.scaled_model is not None:
+            if hasattr(self.strategy.scaled_model, "batch_stats"):
+                self.strategy.batch_stats = self.strategy.scaled_model.batch_stats
+            else:
+                print("Warning: scaled_model has no batch_stats attribute, skipping propagation")
 
+        # Call callbacks
         for callback in self.callbacks:
             try:
                 logs, _ = callback.on_train_end(logs, *args, **kwargs)
@@ -273,6 +313,7 @@ class TrainerModule:
         logs = {'epoch': self.epoch, 'global_step': self.global_step}
 
         return logs
+
 
     def on_epoch_begin(self, logs, *args, **kwargs):
 

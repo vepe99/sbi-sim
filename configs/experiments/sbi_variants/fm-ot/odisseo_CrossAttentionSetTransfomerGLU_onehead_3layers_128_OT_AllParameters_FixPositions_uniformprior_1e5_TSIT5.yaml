@@ -15,6 +15,8 @@ learning_rate: 0.001
 
 data:
   target: sbisim.data.benchmarks.OdisseoOTAllParametersFiXPosition_uniformprior_TSIT5_error
+  params:
+    add_noise: False
   _file: configs/datasets/benchmarks/10e5_dataset.yaml
   normalization: True
 
@@ -51,13 +53,13 @@ strategy:
           params:
             sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPosition_fixposition_uniformprior_TSIT5
+      target: sbisim.flows.models.CrossAttentionSetTransformer_GLU.SetTransformerPosition_fixposition_uniformprior_TSIT5
       params:
         dim_flow: ${dim_flow}
         sample_size: 1000
         N_dim: 128
         N_head: 1
-        depth: 2
+        depth: 3
 
 training:
   num_epochs: 500

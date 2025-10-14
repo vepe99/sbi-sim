@@ -6,8 +6,8 @@ import sys
 from gc import callbacks
 from pathlib import Path
 from autocvd import autocvd
-# autocvd(num_gpus = 1, interval=1)
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'  
+autocvd(num_gpus = 1, interval=1)
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'  
 
 import wandb
 from omegaconf import OmegaConf
@@ -165,6 +165,13 @@ def run(config):
                 print(f"Testing {checkpoint_type} checkpoint...")
 
                 trainer.restore_from_checkpoint(config.runtime.logdir, type=checkpoint_type)
+                trainer.restore_from_checkpoint(config.runtime.logdir, type=checkpoint_type)
+
+                # Propagate batch_stats to scaled_model
+                if hasattr(trainer.strategy, "batch_stats") and trainer.strategy.batch_stats is not None:
+                    if hasattr(trainer.strategy, "scaled_model") and trainer.strategy.scaled_model is not None:
+                        trainer.strategy.scaled_model.batch_stats = trainer.strategy.batch_stats
+
                 trainer.pack_()
 
                 if 'seed' in test_config:

@@ -39,7 +39,7 @@ class GeneratorDataloaderAllParameters_position_OT_newprior_numpy(Iterable):
         if self.use_jax:
             return jnp.load(file, allow_pickle=True)
         else:
-            print('using numpy to load')
+            # print('using numpy to load')
             return np.load(file, allow_pickle=True)
 
     def get_observation(self, idx):
@@ -130,6 +130,7 @@ class GeneratorDataloaderAllParameters_position_OT_newprior_numpy(Iterable):
         perm = jr.permutation(permutation_seed, num_samples)
         self.X = self.X[perm]
         self.y = self.y[perm]
+
 
         self.mean_X = self.X.mean(axis=0)
         self.std_X = self.X.std(axis=0)

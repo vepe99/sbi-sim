@@ -16,6 +16,8 @@ from .c2st import (C2ST,
                    C2ST_OT_AllParametersPositions_uniformprior_uniformnorm, 
                    C2ST_OT_AllParametersPositions_uniformprior_uniformnorm_TrueSimulation,
                    C2ST_OT_AllParametersFixPositions_uniformprior,
-                   C2ST_OT_AllParametersFixPositions_uniformprior_TrueSimulation)
+                   C2ST_OT_AllParametersFixPositions_uniformprior_TrueSimulation,
+                   C2ST_OT_AllParametersPositions_fixedtime_uniformprior,
+                   C2ST_OT_AllParametersPositions_fixedtime_uniformprior_TrueSimulation)
 from .visualization import BenchmarkScatterPlot, corner_plot_posterior, ranks
 from .two_dimensional import TwoDimensionalPlot

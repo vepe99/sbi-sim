@@ -2,6 +2,7 @@ from dataclasses import field
 from typing import List, Tuple, Optional, Any, Sequence, Union
 
 from jax import Array, dtypes, random
+import jax
 from jax._src.nn.initializers import RealNumeric, DTypeLikeInexact, Initializer, _compute_fans, lecun_uniform
 from jax._src import core
 
@@ -9,7 +10,7 @@ from diffusers.models.embeddings_flax import FlaxTimesteps
 from ..cnf import ContinuousNormalizingFlow
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
-
+import jax
 
 import flax.linen as nn
 
@@ -336,6 +337,7 @@ class DenseResidualNet(nn.Module):
     context_dim: int = 0
     activation_fn: str = 'elu'
     use_layer_norm: bool = False
+    use_batch_norm: bool = False
 
     def setup(self):
 
@@ -345,8 +347,10 @@ class DenseResidualNet(nn.Module):
         self.dense_in = nn.Dense(self.hidden_dims[0], kernel_init=lecun_uniform(),
                                  bias_init=pytorch_bias_init(self.in_dim))
          # Add input normalization
-        if self.use_layer_norm:
-            self.input_norm = nn.BatchNorm()
+        
+        #Add batch norm
+        if self.use_batch_norm:
+            self.loss_grad_bn = nn.BatchNorm()
 
         for hidden_dim, hidden_dim_next in zip(self.hidden_dims, list(self.hidden_dims[1:]) + [self.out_dim]):
             blocks.append(DenseResidualBlocks(hidden_dim, context_dim = self.context_dim,
@@ -365,12 +369,60 @@ class DenseResidualNet(nn.Module):
     def __call__(self, theta, context = None, train=True):
 
 
-        # Normalize input after first dense layer
-        if self.use_layer_norm:
-            theta = self.input_norm(theta, use_running_average=not train)
-            # theta = nn.BatchNorm(use_running_average=not train)(theta)
+        if self.use_batch_norm:
+            theta = self.loss_grad_bn(theta, use_running_average=not train)
     
         x = self.dense_in(theta)
+
+        for block, projection in zip(self.blocks, self.projections):
+
+            x = block(x, context=context)
+            x = projection(x)
+
+        return x
+    
+class DenseResidualNet_batchnorm(nn.Module):
+
+    hidden_dims: List[int]
+    out_dim: int
+    in_dim: int
+    context_dim: int = 0
+    activation_fn: str = 'elu'
+    use_layer_norm: bool = False
+
+
+    def setup(self):
+
+        blocks = []
+        projections = []
+
+        self.dense_in = nn.Dense(self.hidden_dims[0], kernel_init=lecun_uniform(),
+                                 bias_init=pytorch_bias_init(self.in_dim))
+         # Add input normalization
+        
+        #Add batch norm
+        self.loss_grad_bn = nn.BatchNorm()
+
+        for hidden_dim, hidden_dim_next in zip(self.hidden_dims, list(self.hidden_dims[1:]) + [self.out_dim]):
+            blocks.append(DenseResidualBlocks(hidden_dim, context_dim = self.context_dim,
+                                              activation_fn=self.activation_fn,
+                                              use_layer_norm=False))
+            if hidden_dim != hidden_dim_next:
+                projections.append(nn.Dense(hidden_dim_next, use_bias=True,
+                                           kernel_init=lecun_uniform(),
+                                           bias_init=pytorch_bias_init(hidden_dim)))
+            else:
+                projections.append(Identity())
+
+        self.blocks = blocks
+        self.projections = projections
+
+    def __call__(self, theta, context = None, train=True):
+
+        with jax.checking_leaks():
+            x = self.loss_grad_bn(theta, use_running_average=not train)
+    
+        x = self.dense_in(x)
 
         for block, projection in zip(self.blocks, self.projections):
 

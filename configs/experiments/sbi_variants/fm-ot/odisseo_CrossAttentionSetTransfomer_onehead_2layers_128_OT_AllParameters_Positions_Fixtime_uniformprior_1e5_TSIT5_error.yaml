@@ -1,7 +1,7 @@
 #REMEMBER TO USE CODA_VISIBILE_DEVICES=3
 name: Odisseo_0_gradient_signal
 
-dim_flow: 7
+dim_flow: 13
 dim_conditioning: 5
 dim_network: 4
 
@@ -14,7 +14,7 @@ scaling_type: "none"
 learning_rate: 0.001
 
 data:
-  target: sbisim.data.benchmarks.OdisseoOTAllParametersFiXPosition_uniformprior_TSIT5_error
+  target: sbisim.data.benchmarks.OdisseoOTAllParametersPosition_fixedtime_uniformprior_TSIT5_error
   _file: configs/datasets/benchmarks/10e5_dataset.yaml
   normalization: True
 
@@ -51,7 +51,7 @@ strategy:
           params:
             sigma_min: 1e-4
     model:
-      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPosition_fixposition_uniformprior_TSIT5
+      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5
       params:
         dim_flow: ${dim_flow}
         sample_size: 1000
@@ -69,14 +69,14 @@ training:
 test:
   active: True
   tests:
-    true_sampling:
-      target: sbisim.callbacks.c2st.C2ST_OT_AllParametersFixPositions_uniformprior_TrueSimulation
-      params:
-        savedir: ${runtime.logdir}
-        num_total_samples: 10000
-        batch_size: ${batch_size}
+    # true_sampling:
+    #   target: sbisim.callbacks.c2st.C2ST_OT_AllParametersPositions_fixedtime_uniformprior_TrueSimulation
+    #   params:
+    #     savedir: ${runtime.logdir}
+    #     num_total_samples: 10000
+    #     batch_size: ${batch_size}
     ranks:
-      target: sbisim.callbacks.C2ST_OT_AllParametersFixPositions_uniformprior
+      target: sbisim.callbacks.C2ST_OT_AllParametersPositions_fixedtime_uniformprior
       params:
         save_every: 200
         savedir: ${runtime.logdir}

@@ -1,0 +1,627 @@
+from typing import Dict, Optional, Tuple, Union
+
+import flax
+import flax.linen as nn
+from flax.core.frozen_dict import FrozenDict
+
+from diffusers.configuration_utils import ConfigMixin, flax_register_to_config
+from diffusers.utils import BaseOutput
+from diffusers.models.embeddings_flax import FlaxTimestepEmbedding, FlaxTimesteps
+from diffusers.models.modeling_flax_utils import FlaxModelMixin
+from diffusers.models.unets.unet_2d_blocks_flax import (
+    FlaxCrossAttnDownBlock2D,
+    FlaxCrossAttnUpBlock2D,
+    FlaxDownBlock2D,
+    FlaxUNetMidBlock2DCrossAttn,
+    FlaxUpBlock2D,
+)
+from ..cnf import ContinuousNormalizingFlow
+
+from flax.linen import dot_product_attention, DenseGeneral, LayerNorm
+import flax.linen as nn
+import jax.numpy as jnp
+from typing import Any, Callable, Sequence, Optional, Union
+
+
+from typing import Optional, Tuple
+
+import jax
+# jax.config.update("jax_debug_nans", True)
+import jax.numpy as jnp
+import flax.linen as nn
+from flax.core.frozen_dict import FrozenDict
+
+# diffusers / embedding utilities (kept for compatibility)
+from diffusers.models.embeddings_flax import FlaxTimestepEmbedding, FlaxTimesteps
+from diffusers.configuration_utils import ConfigMixin, flax_register_to_config
+from diffusers.models.modeling_flax_utils import FlaxModelMixin
+
+# conveniences
+Dense = nn.Dense
+DenseGeneral = nn.DenseGeneral
+LayerNorm = nn.LayerNorm
+from flax.linen import dot_product_attention
+
+
+class MLPBlock(nn.Module):
+    dim: int
+    hidden_mult: int = 4
+
+    @nn.compact
+    def __call__(self, x):
+        h = Dense(self.dim * self.hidden_mult)(x)
+        h = nn.silu(h)
+        h = Dense(self.dim)(h)
+        return h
+
+
+class FiLM(nn.Module):
+    """Feature-wise Linear Modulation conditioned on t_emb.
+
+    Maps t_emb -> gamma, beta and applies gamma * x + beta.
+    Keeps a small MLP to produce gamma/beta per channel.
+    """
+    out_dim: int
+    hidden: int = 128
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray):
+        # x: (B, ..., C), t_emb: (B, D_t)
+        C = self.out_dim
+        # small MLP
+        h = Dense(self.hidden)(t_emb)
+        h = nn.silu(h)
+        # final projection to 2*C
+        # initialize final layer small so gamma ~ 1 and beta ~ 0 at start
+        init = nn.initializers.normal(stddev=1e-3)
+        params = Dense(2 * C, kernel_init=init)(h)  # (B, 2C)
+        gamma, beta = jnp.split(params, 2, axis=-1)  # each (B, C)
+
+        # broadcast to x shape
+        if x.ndim == 3:
+            # (B, N, C)
+            gamma = gamma[:, None, :]
+            beta = beta[:, None, :]
+        elif x.ndim == 2:
+            # (B, C)
+            pass
+        else:
+            # support other shapes by broadcasting on the last axis
+            expand_dims = [1] * (x.ndim - 2)
+            gamma = gamma.reshape((gamma.shape[0],) + tuple(expand_dims) + (gamma.shape[-1],))
+            beta = beta.reshape((beta.shape[0],) + tuple(expand_dims) + (beta.shape[-1],))
+
+        return gamma * x + beta
+
+
+class SAB(nn.Module):
+    """Self-attention block for sets. Optionally uses time embedding and FiLM.
+
+    Input: x (B, N, N_dim)
+    t_emb: optional (B, D_t) - will be projected and broadcast to tokens
+    """
+    N_dim: int
+    N_head: int
+    ln: bool = False
+    use_film: bool = True
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t_emb: Optional[jnp.ndarray] = None):
+        B, N, _ = x.shape
+        dim_split = self.N_dim // self.N_head
+        kernel_init = nn.initializers.variance_scaling(scale=1/3, mode="fan_in", distribution="uniform")
+
+        # project q/k/v
+        q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
+        k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
+        v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
+
+        # if t_emb is not None:
+        #     # project t_emb to same head-split shape and broadcast
+        #     t_proj_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
+        #         jnp.repeat(t_emb[:, None, :], N, axis=1)
+        #     )
+        #     t_proj_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
+        #         jnp.repeat(t_emb[:, None, :], N, axis=1)
+        #     )
+        #     q = q + t_proj_q
+        #     k = k + t_proj_k
+
+        a = dot_product_attention(q, k, v)  # (B, N, N_head, dim_split)
+        out = a.reshape(B, N, self.N_dim)
+
+        # residual
+        out = out + x
+        if self.ln:
+            out = LayerNorm()(out)
+
+        # FiLM modulation (apply before FFN)
+        if self.use_film and t_emb is not None:
+            out = FiLM(out_dim=self.N_dim)(out, t_emb)
+
+        # FF
+        out_ff = MLPBlock(dim=self.N_dim)(out)
+        out = out + out_ff
+        if self.ln:
+            out = LayerNorm()(out)
+
+        return out
+
+
+class CrossAttentionBlock(nn.Module):
+    """Cross-attention where queries = theta (latent params) and keys/values = set.
+
+    - x (queries): (B, n_query, N_dim)  typically theta projected
+    - context (keys/values): (B, N, N_dim)  particle embeddings
+    - t_emb optional incorporated into q/k like in SAB
+
+    Returns: (B, n_query, N_dim)
+    """
+    N_dim: int
+    N_head: int
+    ln: bool = False
+    use_film: bool = True
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, context: jnp.ndarray, t_emb: Optional[jnp.ndarray] = None, loss_grad_emb: Optional[jnp.ndarray]= None):
+        B, n_query, _ = x.shape
+        N = context.shape[1]
+        dim_split = self.N_dim // self.N_head
+        kernel_init = nn.initializers.variance_scaling(scale=1/3, mode="fan_in", distribution="uniform")
+
+        q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
+        k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(context)
+        v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(context)
+
+        if loss_grad_emb is not None:
+            loss_grad_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(loss_grad_emb)
+            loss_grad_v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(loss_grad_emb)
+
+            k = jnp.concatenate([k, loss_grad_k], axis=1)
+            v = jnp.concatenate([v, loss_grad_v], axis=1)
+
+        a = dot_product_attention(q, k, v)  # (B, n_query, N_head, dim_split)
+        out = a.reshape(B, n_query, self.N_dim)
+
+        out = out + x
+        if self.ln:
+            out = LayerNorm()(out)
+
+        # FiLM modulation
+        if self.use_film and t_emb is not None:
+            out = FiLM(out_dim=self.N_dim)(out, t_emb)
+
+        out_ff = MLPBlock(dim=self.N_dim)(out)
+        out = out + out_ff
+        if self.ln:
+            out = LayerNorm()(out)
+
+        return out
+
+
+class SetTransformerCross(nn.Module):
+    """SetTransformer variant that uses cross-attention for conditioning and FiLM.
+
+    This variant REMOVES returning per-particle embeddings; it only returns
+    the theta-aware summary (n_query outputs) and optionally projects to out_dim.
+
+    Parameters
+    ----------
+    N_dim: int   -> model hidden dim
+    N_head: int
+    depth: int   -> number of SAB blocks
+    n_query: int -> how many query tokens to create from theta (1 = single summary)
+    out_dim: Optional[int] -> project theta_out to this dim (if provided)
+    ln: bool
+    use_film: bool
+
+    Call: (x, t_emb=None, theta_emb=None)
+    - x: (B, N, D_in)
+    - t_emb: (B, D_t) optional
+    - theta_emb: (B, D_theta) optional (if None, seeds are used as learned queries)
+
+    Returns:
+    theta_out: (B, n_query, out_dim or N_dim)  (if n_query==1, you might squeeze)
+    """
+
+    N_dim: int
+    N_head: int
+    depth: int = 2
+    n_query: int = 1
+    out_dim: Optional[int] = None
+    ln: bool = False
+    use_film: bool = True
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t_emb: Optional[jnp.ndarray] = None, theta_emb: Optional[jnp.ndarray] = None, loss_grad_emb: Optional[jnp.ndarray] = None,) -> jnp.ndarray:
+        # x: (B, N, D_in)
+        B, N, _ = x.shape
+
+        # 1) lift input tokens to model dim
+        if x.shape[-1] != self.N_dim:
+            x = Dense(self.N_dim)(x)  # (B, N, N_dim)
+
+        # 2) feed through stacked SABs
+        for _ in range(self.depth):
+            x = SAB(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(x, t_emb=t_emb)
+
+        # 3) Prepare queries (theta). If theta_emb is provided, project it; otherwise learn seeds.
+        if theta_emb is not None:
+            # theta_emb: (B, D_theta) -> project to (B, n_query, N_dim)
+            q = Dense(self.N_dim)(theta_emb)
+            q = nn.silu(q)
+            q = Dense(self.N_dim)(q)
+            # expand to multiple queries if requested
+            if self.n_query > 1:
+                q = jnp.repeat(q[:, None, :], self.n_query, axis=1)  # (B, n_query, N_dim)
+            else:
+                q = q[:, None, :]
+        else:
+            # learned seeds
+            seeds = self.param("seeds", nn.initializers.xavier_uniform(), (1, self.n_query, self.N_dim))
+            q = jnp.repeat(seeds, B, axis=0)
+
+        # 3.5) Prepare queries (loss_grad). If loss_grad is provided, project it; otherwise learn seeds.
+        if loss_grad_emb is not None:
+
+            # theta_emb: (B, D_theta) -> project to (B, n_query, N_dim)
+            lg_emb = Dense(self.N_dim)(loss_grad_emb)
+            lg_emb = nn.silu(lg_emb)
+            lg_emb = Dense(self.N_dim)(lg_emb)
+            # expand to multiple queries if requested
+            if self.n_query > 1:
+                lg_emb = jnp.repeat(lg_emb[:, None, :], self.n_query, axis=1)  # (B, n_query, N_dim)
+            else:
+                lg_emb = lg_emb[:, None, :]
+        else:
+            # learned seeds
+            seeds = self.param("seeds", nn.initializers.xavier_uniform(), (1, self.n_query, self.N_dim))
+            lg_emb = jnp.repeat(seeds, B, axis=0)
+
+        # 4) Cross-attention: queries attend to particle set
+        q_out = CrossAttentionBlock(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(q, x, t_emb=t_emb, loss_grad_emb=lg_emb )
+
+        # 5) optional projection
+        if self.out_dim is not None:
+            q_out = Dense(self.out_dim)(q_out)
+
+        # If n_query==1, squeeze to (B, out_dim) for convenience
+        if self.n_query == 1:
+            q_out = jnp.squeeze(q_out, axis=1)
+
+        return q_out
+
+
+@flax_register_to_config
+class SetTransformerPosition_fixposition_uniformprior_lossgrad_pointcloudTSIT5(nn.Module, FlaxModelMixin, ConfigMixin):
+    """Flow module that uses SetTransformerCross as its encoder.
+
+    Key args (exposed as dataclass config via flax_register_to_config):
+      - sample_size: int (expected N particles when creating dummy inputs)
+      - dim_flow: int (final output dim)
+      - N_dim, N_head, depth: SetTransformer hyperparams
+      - mean_pointcloud / std_pointcloud: arrays for normalization
+    """
+    sample_size: int = 1000
+    dim_flow: int = 7
+    N_dim: int = 64
+    N_head: int = 8
+    depth: int = 3
+    ln: bool = True
+    dtype: jnp.dtype = jnp.float32
+    flip_sin_to_cos: bool = True
+    freq_shift: int = 0
+    use_film: bool = True
+
+    # these paths/arrays can be set externally; provided here for compatibility
+    mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
+    std_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_pointcloud.npz')['std_x']
+
+    def init_weights(self, rng: jax.Array) -> FrozenDict:
+        # initialize params by calling init with dummy inputs
+        sample_shape = (1, self.sample_size, 6)
+        sample = jnp.zeros(sample_shape, dtype=jnp.float32)
+        timesteps = jnp.ones((1,), dtype=jnp.int32)
+        encoder_hidden_states = jnp.zeros((1, self.dim_flow), dtype=jnp.float32)
+        loss_grad = jnp.zeros((1, self.dim_flow+1), dtype=jnp.float32)
+    
+
+        params_rng, dropout_rng = jax.random.split(rng)
+        rngs = {"params": params_rng, "dropout": dropout_rng}
+
+        # return self.init(rngs, timesteps=timesteps, sample=encoder_hidden_states, encoder_hidden_states=sample, loss_grad=loss_grad)["params"]
+
+        # IMPORTANT: return the full variables dict so caller can extract params & batch_stats
+        variables = self.init(
+            rngs,
+            timesteps=timesteps,
+            sample=encoder_hidden_states,
+            encoder_hidden_states=sample,
+            loss_grad=loss_grad,
+            train=True,   # IMPORTANT -> causes BatchNorm to create batch_stats
+        )
+
+        return variables  # contains variables['params'] and variables.get('batch_stats')
+
+
+    def setup(self) -> None:
+        time_embed_dim = self.N_dim * 4
+
+        # time
+        self.time_proj = FlaxTimesteps(
+            self.N_dim, flip_sin_to_cos=self.flip_sin_to_cos, freq_shift=self.freq_shift
+        )
+        self.time_embedding = FlaxTimestepEmbedding(time_embed_dim, dtype=self.dtype)
+
+        # simple param projection (instead of FlaxTimestepEmbedding)
+        self.param_proj = nn.Sequential([
+            Dense(self.N_dim),
+            nn.silu,
+            Dense(self.N_dim),
+        ])
+
+        self.loss_grad_proj = nn.Sequential([
+            Dense(self.N_dim),
+            nn.silu,
+            Dense(self.N_dim),
+        ])
+        # self.layernorm_lossgrad = LayerNorm()
+        self.loss_grad_bn = nn.BatchNorm(
+
+        )
+
+        # encoder
+        self.SetTransformerEncoder = SetTransformerCross(
+            N_dim=self.N_dim,
+            N_head=self.N_head,
+            depth=self.depth,
+            n_query=1,
+            out_dim=self.dim_flow,
+            ln=self.ln,
+            use_film=self.use_film,
+        )
+
+        self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
+
+    def normalization(self, x):
+        # expects x shape (N, 6) or broadcastable
+        normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud)
+        return normalized_x
+
+    def __call__(
+        self,
+        timesteps: jnp.ndarray,
+        sample: jnp.ndarray,
+        encoder_hidden_states: jnp.ndarray,
+        loss_grad: jnp.ndarray,
+        return_dict: bool = False,
+        train: bool = False,
+    ) -> jnp.ndarray:
+        # jax.debug.print('timesteps Nan: {value}', value = jnp.isnan(timesteps).sum())
+        # jax.debug.print('sample Nan: {value}', value = jnp.isnan(sample).sum())
+        # jax.debug.print('encoder_hidden_states Nan: {value}', value = jnp.isnan(encoder_hidden_states).sum())
+        # jax.debug.print('loss_grad Nan: {value}', value = jnp.isnan(loss_grad).sum())
+
+        # jax.debug.print('loss_grad : {value}', value = loss_grad)
+        # jax.debug.print('sample : {value}', value = sample)
+        # jax.debug.print('encoder_hidden_states : {value}', value = encoder_hidden_states)
+        # jax.debug.print('timesteps : {value}', value = timesteps)
+
+        # jax.debug.print('AFTER PROJECTIONS:')
+
+
+
+        # timesteps: (B,) or scalar
+        if not isinstance(timesteps, jnp.ndarray):
+            timesteps = jnp.array([timesteps], dtype=jnp.int32)
+        elif isinstance(timesteps, jnp.ndarray) and len(timesteps.shape) == 0:
+            timesteps = timesteps.astype(dtype=jnp.float32)
+            timesteps = jnp.expand_dims(timesteps, 0)
+
+        # normalize particle cloud (encoder_hidden_states) and keep sample semantics
+        # in your original Flow you swapped sample and encoder_hidden_states to match diffusers' API.
+        encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
+
+        # time embedding
+        timesteps = jnp.reshape(timesteps, -1)
+        t_emb = self.time_proj(timesteps)
+        t_emb = self.time_embedding(t_emb)
+
+        # swap: sample is expected to be the conditioning in diffusers' style here
+        temp_ = sample
+        sample = encoder_hidden_states   # now sample: (B, N, 6)
+        encoder_hidden_states = temp_    # now encoder_hidden_states: (B, dim_flow)
+        
+
+        # project encoder_hidden_states (theta) to N_dim
+        theta_emb = self.param_proj(encoder_hidden_states)  # (B, N_dim)
+
+        #porject the loss grad to N_dim
+        # loss_grad = self.layernorm_lossgrad(loss_grad)
+        loss_grad = self.loss_grad_bn(loss_grad, use_running_average=not train)
+        loss_grad_emb = self.loss_grad_proj(loss_grad)
+        
+        # jax.debug.print('loss_grad_emb Nan: {value}', value = jnp.isnan(loss_grad_emb).sum())
+        # jax.debug.print('sample Nan: {value}', value = jnp.isnan(sample).sum())
+        # jax.debug.print('t_emb Nan: {value}', value = jnp.isnan(t_emb).sum())
+        # jax.debug.print('theta_emb Nan: {value}', value = jnp.isnan(theta_emb).sum())
+
+        # jax.debug.print('loss_grad_emb : {value}', value = loss_grad_emb)
+        # jax.debug.print('sample : {value}', value = sample)
+        # jax.debug.print('t_emb : {value}', value = t_emb)
+        # jax.debug.print('theta_emb : {value}', value = theta_emb)
+
+
+        # call SetTransformerCross: sample=(B,N,6), t_emb=(B, D_t), theta_emb=(B, N_dim)
+        out = self.SetTransformerEncoder(sample, t_emb=t_emb, theta_emb=theta_emb, loss_grad_emb=loss_grad_emb)
+
+        # out is (B, dim_flow) because SetTransformerCross out_dim=dim_flow and n_query=1
+        return out
+
+
+
+@flax_register_to_config
+class SetTransformerPosition_fixtime_uniformprior_lossgrad_pointcloudTSIT5(nn.Module, FlaxModelMixin, ConfigMixin):
+    """Flow module that uses SetTransformerCross as its encoder.
+
+    Key args (exposed as dataclass config via flax_register_to_config):
+      - sample_size: int (expected N particles when creating dummy inputs)
+      - dim_flow: int (final output dim)
+      - N_dim, N_head, depth: SetTransformer hyperparams
+      - mean_pointcloud / std_pointcloud: arrays for normalization
+    """
+    sample_size: int = 1000
+    dim_flow: int = 7
+    N_dim: int = 64
+    N_head: int = 8
+    depth: int = 3
+    ln: bool = True
+    dtype: jnp.dtype = jnp.float32
+    flip_sin_to_cos: bool = True
+    freq_shift: int = 0
+    use_film: bool = True
+
+    # these paths/arrays can be set externally; provided here for compatibility
+    mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
+    std_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_pointcloud.npz')['std_x']
+
+    def init_weights(self, rng: jax.Array) -> FrozenDict:
+        # initialize params by calling init with dummy inputs
+        sample_shape = (1, self.sample_size, 6)
+        sample = jnp.zeros(sample_shape, dtype=jnp.float32)
+        timesteps = jnp.ones((1,), dtype=jnp.int32)
+        encoder_hidden_states = jnp.zeros((1, self.dim_flow), dtype=jnp.float32)
+        loss_grad = jnp.zeros((1, self.dim_flow+1), dtype=jnp.float32)
+    
+
+        params_rng, dropout_rng = jax.random.split(rng)
+        rngs = {"params": params_rng, "dropout": dropout_rng}
+
+        # return self.init(rngs, timesteps=timesteps, sample=encoder_hidden_states, encoder_hidden_states=sample, loss_grad=loss_grad)["params"]
+
+        # IMPORTANT: return the full variables dict so caller can extract params & batch_stats
+        variables = self.init(
+            rngs,
+            timesteps=timesteps,
+            sample=encoder_hidden_states,
+            encoder_hidden_states=sample,
+            loss_grad=loss_grad,
+            train=True,   # IMPORTANT -> causes BatchNorm to create batch_stats
+        )
+
+        return variables  # contains variables['params'] and variables.get('batch_stats')
+
+
+    def setup(self) -> None:
+        time_embed_dim = self.N_dim * 4
+
+        # time
+        self.time_proj = FlaxTimesteps(
+            self.N_dim, flip_sin_to_cos=self.flip_sin_to_cos, freq_shift=self.freq_shift
+        )
+        self.time_embedding = FlaxTimestepEmbedding(time_embed_dim, dtype=self.dtype)
+
+        # simple param projection (instead of FlaxTimestepEmbedding)
+        self.param_proj = nn.Sequential([
+            Dense(self.N_dim),
+            nn.silu,
+            Dense(self.N_dim),
+        ])
+
+        self.loss_grad_proj = nn.Sequential([
+            Dense(self.N_dim),
+            nn.silu,
+            Dense(self.N_dim),
+        ])
+        # self.layernorm_lossgrad = LayerNorm()
+        self.loss_grad_bn = nn.BatchNorm(
+
+        )
+
+        # encoder
+        self.SetTransformerEncoder = SetTransformerCross(
+            N_dim=self.N_dim,
+            N_head=self.N_head,
+            depth=self.depth,
+            n_query=1,
+            out_dim=self.dim_flow,
+            ln=self.ln,
+            use_film=self.use_film,
+        )
+
+        self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
+
+    def normalization(self, x):
+        # expects x shape (N, 6) or broadcastable
+        normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud)
+        return normalized_x
+
+    def __call__(
+        self,
+        timesteps: jnp.ndarray,
+        sample: jnp.ndarray,
+        encoder_hidden_states: jnp.ndarray,
+        loss_grad: jnp.ndarray,
+        return_dict: bool = False,
+        train: bool = False,
+    ) -> jnp.ndarray:
+        # jax.debug.print('timesteps Nan: {value}', value = jnp.isnan(timesteps).sum())
+        # jax.debug.print('sample Nan: {value}', value = jnp.isnan(sample).sum())
+        # jax.debug.print('encoder_hidden_states Nan: {value}', value = jnp.isnan(encoder_hidden_states).sum())
+        # jax.debug.print('loss_grad Nan: {value}', value = jnp.isnan(loss_grad).sum())
+
+        # jax.debug.print('loss_grad : {value}', value = loss_grad)
+        # jax.debug.print('sample : {value}', value = sample)
+        # jax.debug.print('encoder_hidden_states : {value}', value = encoder_hidden_states)
+        # jax.debug.print('timesteps : {value}', value = timesteps)
+
+        # jax.debug.print('AFTER PROJECTIONS:')
+
+
+
+        # timesteps: (B,) or scalar
+        if not isinstance(timesteps, jnp.ndarray):
+            timesteps = jnp.array([timesteps], dtype=jnp.int32)
+        elif isinstance(timesteps, jnp.ndarray) and len(timesteps.shape) == 0:
+            timesteps = timesteps.astype(dtype=jnp.float32)
+            timesteps = jnp.expand_dims(timesteps, 0)
+
+        # normalize particle cloud (encoder_hidden_states) and keep sample semantics
+        # in your original Flow you swapped sample and encoder_hidden_states to match diffusers' API.
+        encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
+
+        # time embedding
+        timesteps = jnp.reshape(timesteps, -1)
+        t_emb = self.time_proj(timesteps)
+        t_emb = self.time_embedding(t_emb)
+
+        # swap: sample is expected to be the conditioning in diffusers' style here
+        temp_ = sample
+        sample = encoder_hidden_states   # now sample: (B, N, 6)
+        encoder_hidden_states = temp_    # now encoder_hidden_states: (B, dim_flow)
+        
+
+        # project encoder_hidden_states (theta) to N_dim
+        theta_emb = self.param_proj(encoder_hidden_states)  # (B, N_dim)
+
+        #porject the loss grad to N_dim
+        # loss_grad = self.layernorm_lossgrad(loss_grad)
+        loss_grad = self.loss_grad_bn(loss_grad, use_running_average=not train)
+        loss_grad_emb = self.loss_grad_proj(loss_grad)
+        
+        # jax.debug.print('loss_grad_emb Nan: {value}', value = jnp.isnan(loss_grad_emb).sum())
+        # jax.debug.print('sample Nan: {value}', value = jnp.isnan(sample).sum())
+        # jax.debug.print('t_emb Nan: {value}', value = jnp.isnan(t_emb).sum())
+        # jax.debug.print('theta_emb Nan: {value}', value = jnp.isnan(theta_emb).sum())
+
+        # jax.debug.print('loss_grad_emb : {value}', value = loss_grad_emb)
+        # jax.debug.print('sample : {value}', value = sample)
+        # jax.debug.print('t_emb : {value}', value = t_emb)
+        # jax.debug.print('theta_emb : {value}', value = theta_emb)
+
+
+        # call SetTransformerCross: sample=(B,N,6), t_emb=(B, D_t), theta_emb=(B, N_dim)
+        out = self.SetTransformerEncoder(sample, t_emb=t_emb, theta_emb=theta_emb, loss_grad_emb=loss_grad_emb)
+
+        # out is (B, dim_flow) because SetTransformerCross out_dim=dim_flow and n_query=1
+        return out 

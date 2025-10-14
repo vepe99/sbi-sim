@@ -1,7 +1,7 @@
-# from autocvd import autocvd
-# autocvd(num_gpus = 1, interval=1)
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '5'
+from autocvd import autocvd
+autocvd(num_gpus = 1, interval=1)
+# import os
+# os.environ['CUDA_VISIBLE_DEVICES'] = '5'
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,7 +27,7 @@ from chainconsumer import Chain, ChainConsumer, Truth
 
 from odisseo import construct_initial_state
 from odisseo.dynamics import  DIRECT_ACC_MATRIX, DIRECT_ACC_LAXMAP
-from odisseo.option_classes import SimulationConfig, SimulationParams, MNParams, NFWParams, PlummerParams, PSPParams, MN_POTENTIAL, NFW_POTENTIAL, PSP_POTENTIAL
+from odisseo.option_classes import SimulationConfig, SimulationParams, MNParams, NFWParams, PlummerParams, PSPParams, MN_POTENTIAL, NFW_POTENTIAL, PSP_POTENTIAL, DIFFRAX_BACKEND, TSIT5
 from odisseo.initial_condition import Plummer_sphere
 from odisseo.time_integration import time_integration
 from odisseo.units import CodeUnits
@@ -41,7 +41,7 @@ code_length = 10.0 * u.kpc
 code_mass = 1e4 * u.Msun
 code_time = 3 * u.Gyr
 code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-N_particles = 1000
+N_particles = 10_000
 
 pos_com_final = jnp.array([[11.8, 0.79, 6.4]]) * u.kpc.to(code_units.code_length)
 vel_com_final = jnp.array([[109.5,-254.5,-90.3]]) * (u.km/u.s).to(code_units.code_velocity)
@@ -51,7 +51,10 @@ config_sim = SimulationConfig(N_particles = N_particles,
                             num_timesteps = 1000, 
                             external_accelerations=(NFW_POTENTIAL, MN_POTENTIAL, PSP_POTENTIAL), 
                             acceleration_scheme = DIRECT_ACC_MATRIX,
-                            softening = (0.1 * u.pc).to(code_units.code_length).value,) #default values
+                            softening = (0.1 * u.pc).to(code_units.code_length).value,
+                            integrator = DIFFRAX_BACKEND,
+                             fixed_timestep = False,
+                             diffrax_solver = TSIT5,) #default values
         #the center of mass needs to be integrated backwards in time first 
 config_com = config_sim._replace(N_particles=1,)
 
@@ -114,8 +117,8 @@ def log_diag_multivariate_normal(x, mean, sigma):
         return norm_const + exponent
 
 @jit
-def stream_likelihood(model_stream, obs_stream, ):
-     # Define bin edges and create meshgrids
+def stream_likelihood(model_stream, obs_stream):
+    # Define bin edges and create meshgrids
     phi1_bins = jnp.linspace(-120, 70, 65)    # 64 bins
     phi2_bins = jnp.linspace(-8, 2, 33)       # 32 bins
     v1_bins = jnp.linspace(-2., 1.0, 65)      # 64 bins  
@@ -130,7 +133,6 @@ def stream_likelihood(model_stream, obs_stream, ):
     R_GRID, VR_GRID = jnp.meshgrid(R_bins, vR_bins, indexing='ij')
 
 
-            
     @jit
     def densities(stream):
         # take relevant projections from simulated stream
@@ -198,14 +200,82 @@ def stream_likelihood(model_stream, obs_stream, ):
     dens_phi_target, dens_v_target, dens_R_target = densities(obs_stream)
     dens_phi, dens_v, dens_R = densities(model_stream)
 
-    return jnp.exp(-0.1*(jnp.sum((dens_phi - dens_phi_target)**2) +
-            jnp.sum((dens_v - dens_v_target)**2) +
-            jnp.sum((dens_R - dens_R_target)**2)))
+
+    return jnp.exp(-0.1 * (
+            loss_js(dens_phi_target, dens_phi) 
+            +
+            loss_js(dens_v_target, dens_v) 
+            + 
+            loss_js(dens_R_target, dens_R)
+            )
+            )
+
+
+    
+# Utility: ensure non-neg and avoid zeros
+@jit
+def _safe(d, eps=1e-12):
+    return jnp.clip(d, a_min=eps)
+
+
+@jit
+def loss_js(d_target, d_sim):
+    p = _safe(d_target) / jnp.sum(_safe(d_target))
+    q = _safe(d_sim)   / jnp.sum(_safe(d_sim))
+    m = 0.5 * (p + q)
+    return 0.5 * (jnp.sum(p * (jnp.log(p) - jnp.log(m))) + jnp.sum(q * (jnp.log(q) - jnp.log(m))))
+
+
+@jit
+def kde2d_on_grid(x, grid_x, grid_y, bandwidth):
+    """
+    Evaluate 2D Gaussian KDE on a meshgrid.
+
+    Parameters
+    ----------
+    x : (N, 2) 
+        Simulation data points in 2D (e.g., (phi1, phi2)).
+    grid_x, grid_y : (Nx, Ny)
+        Meshgrid arrays defining grid coordinates where density is evaluated.
+    bandwidth : float or (2,)
+        Bandwidth per dimension (std dev of Gaussian kernel).
+
+    Returns
+    -------
+    dens : (Nx, Ny) 
+        KDE density evaluated at grid points.
+    """
+    N, d = x.shape
+    assert d == 2
+
+    # Flatten grid to (G, 2)
+    grid_points = jnp.stack([grid_x.ravel(), grid_y.ravel()], axis=1)  # (G,2)
+
+    # Differences (G, N, 2)
+    diff = grid_points[:, None, :] - x[None, :, :]
+
+    # Handle bandwidth
+    bw = jnp.atleast_1d(bandwidth)
+    if bw.shape == (1,):
+        bw = jnp.repeat(bw, 2)
+    var = bw**2
+
+    # Mahalanobis distance per dimension
+    sq = (diff**2) / var  # (G,N,2)
+
+    # log kernel for each (gridpoint, datapoint)
+    logk = -0.5 * jnp.sum(sq, axis=-1) - 0.5*jnp.sum(jnp.log(2*jnp.pi*var))
+
+    # logsumexp over datapoints
+    log_dens = logsumexp(logk, axis=1) - jnp.log(N)
+
+    dens = jnp.exp(log_dens).reshape(grid_x.shape)
+    return dens
 
 
 true_GD1_observation_path = '/export/data/vgiusepp/odisseo_data/data_fix_position/true.npz'
 observation = jnp.array(np.load(true_GD1_observation_path)['x'])
-true_theta = jnp.array(np.load(true_GD1_observation_path)['theta'][:1000])
+true_theta = jnp.array(np.load(true_GD1_observation_path)['theta'])
 
 @jit
 def evaluate_loglikelihood(observation, theta_1, ):
@@ -305,13 +375,13 @@ def random_step_fn(rng_key, position):
     """Generate random step proposals for each parameter."""
     # Use different step sizes for different parameters based on their scale
     step_sizes = jnp.array([
-        0.1,    # t_end (Gyr) - smaller steps
-        100.0,  # Mtot (Msun) - larger steps for large values
-        0.001,  # a_Plummer (kpc) - very small steps
-        1e10,    # M_NFW (Msun) - large steps for large values  
-        1.0,    # r_s (kpc)
-        1e9,    # M_MN (Msun) - large steps for large values
-        0.2,    # a_MN (kpc)
+        0.5*1,    # t_end (Gyr) - smaller steps
+        0.5*3000.0,  # Mtot (Msun) - larger steps for large values
+        0.5*0.0001,  # a_Plummer (kpc) - very small steps
+        0.5*1e11,    # M_NFW (Msun) - large steps for large values  
+        0.5*10.0,    # r_s (kpc)
+        0.5*1e11,    # M_MN (Msun) - large steps for large values
+        0.5*1,    # a_MN (kpc)
     ])
     
     # Generate random steps
@@ -346,7 +416,7 @@ def run_inference_vmap(rng_key, num_chains=2):
                                     logdensity_fn=evaluate_log_posterior,
                                     random_step=random_step_fn
                                 ),
-        num_steps=100_000,
+        num_steps=5_000,
         initial_position=extract_single_position(i),
         progress_bar=False,
     )
@@ -354,7 +424,7 @@ def run_inference_vmap(rng_key, num_chains=2):
     return jax.vmap(run_inference_vmap)(jnp.arange(num_chains))
   
 print('start running chains')
-history = run_inference_vmap(jax.random.PRNGKey(42), num_chains=20)
+history = run_inference_vmap(jax.random.PRNGKey(42), num_chains=2)
 
 def convert_multichain_to_dataframe_filtered(positions_dict, is_accepted_mask):
     """Convert dictionary of [num_chains, num_samples] arrays to DataFrame, filtering by acceptance."""

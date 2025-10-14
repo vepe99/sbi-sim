@@ -36,6 +36,8 @@ from flax.core.frozen_dict import FrozenDict
 from diffusers.models.embeddings_flax import FlaxTimestepEmbedding, FlaxTimesteps
 from diffusers.configuration_utils import ConfigMixin, flax_register_to_config
 from diffusers.models.modeling_flax_utils import FlaxModelMixin
+kernel_init_fn = nn.initializers.glorot_normal
+bias_init_fn = nn.initializers.normal
 
 # conveniences
 Dense = nn.Dense
@@ -56,43 +58,21 @@ class MLPBlock(nn.Module):
         return h
 
 
-class FiLM(nn.Module):
-    """Feature-wise Linear Modulation conditioned on t_emb.
+class GLU(nn.Module):
 
-    Maps t_emb -> gamma, beta and applies gamma * x + beta.
-    Keeps a small MLP to produce gamma/beta per channel.
-    """
-    out_dim: int
-    hidden: int = 128
+    N_dim: int
 
-    @nn.compact
-    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray):
-        # x: (B, ..., C), t_emb: (B, D_t)
-        C = self.out_dim
-        # small MLP
-        h = Dense(self.hidden)(t_emb)
-        h = nn.silu(h)
-        # final projection to 2*C
-        # initialize final layer small so gamma ~ 1 and beta ~ 0 at start
-        init = nn.initializers.normal(stddev=1e-3)
-        params = Dense(2 * C, kernel_init=init)(h)  # (B, 2C)
-        gamma, beta = jnp.split(params, 2, axis=-1)  # each (B, C)
+    def setup(self):
 
-        # broadcast to x shape
-        if x.ndim == 3:
-            # (B, N, C)
-            gamma = gamma[:, None, :]
-            beta = beta[:, None, :]
-        elif x.ndim == 2:
-            # (B, C)
-            pass
-        else:
-            # support other shapes by broadcasting on the last axis
-            expand_dims = [1] * (x.ndim - 2)
-            gamma = gamma.reshape((gamma.shape[0],) + tuple(expand_dims) + (gamma.shape[-1],))
-            beta = beta.reshape((beta.shape[0],) + tuple(expand_dims) + (beta.shape[-1],))
+        self.dense1 = nn.Dense(self.N_dim, kernel_init=kernel_init_fn(), bias_init=bias_init_fn())
+        self.dense2 = nn.Dense(self.N_dim, kernel_init=kernel_init_fn(), bias_init=bias_init_fn())
 
-        return gamma * x + beta
+    def __call__(self, x, cond):
+
+        x = self.dense1(x)
+        y = self.dense2(cond)
+
+        return x * nn.sigmoid(y)
 
 
 class SAB(nn.Module):
@@ -104,7 +84,7 @@ class SAB(nn.Module):
     N_dim: int
     N_head: int
     ln: bool = False
-    use_film: bool = True
+
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t_emb: Optional[jnp.ndarray] = None):
@@ -117,16 +97,6 @@ class SAB(nn.Module):
         k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
         v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
 
-        if t_emb is not None:
-            # project t_emb to same head-split shape and broadcast
-            t_proj_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
-                jnp.repeat(t_emb[:, None, :], N, axis=1)
-            )
-            t_proj_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
-                jnp.repeat(t_emb[:, None, :], N, axis=1)
-            )
-            q = q + t_proj_q
-            k = k + t_proj_k
 
         a = dot_product_attention(q, k, v)  # (B, N, N_head, dim_split)
         out = a.reshape(B, N, self.N_dim)
@@ -136,15 +106,7 @@ class SAB(nn.Module):
         if self.ln:
             out = LayerNorm()(out)
 
-        # FiLM modulation (apply before FFN)
-        if self.use_film and t_emb is not None:
-            out = FiLM(out_dim=self.N_dim)(out, t_emb)
-
-        # FF
-        out_ff = MLPBlock(dim=self.N_dim)(out)
-        out = out + out_ff
-        if self.ln:
-            out = LayerNorm()(out)
+        out = GLU(N_dim=self.N_dim)(out, t_emb[:, None, :])
 
         return out
 
@@ -161,7 +123,6 @@ class CrossAttentionBlock(nn.Module):
     N_dim: int
     N_head: int
     ln: bool = False
-    use_film: bool = True
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, context: jnp.ndarray, t_emb: Optional[jnp.ndarray] = None):
@@ -174,32 +135,18 @@ class CrossAttentionBlock(nn.Module):
         k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(context)
         v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(context)
 
-        if t_emb is not None:
-            # project t_emb to match query length and key length
-            t_proj_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
-                jnp.repeat(t_emb[:, None, :], n_query, axis=1)
-            )
-            t_proj_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
-                jnp.repeat(t_emb[:, None, :], N, axis=1)
-            )
-            q = q + t_proj_q
-            k = k + t_proj_k
 
         a = dot_product_attention(q, k, v)  # (B, n_query, N_head, dim_split)
         out = a.reshape(B, n_query, self.N_dim)
 
         out = out + x
-        if self.ln:
-            out = LayerNorm()(out)
 
-        # FiLM modulation
-        if self.use_film and t_emb is not None:
-            out = FiLM(out_dim=self.N_dim)(out, t_emb)
+        # Broadcast or pooled conditioning for shape safety
+        context_pooled = jnp.mean(context, axis=1, keepdims=True)  # (B, 1, N_dim)
+        cond = jnp.concatenate([t_emb[:, None, :], context_pooled], axis=-1)  # (B, 1, D_t + N_dim)
+        cond = jnp.repeat(cond, out.shape[1], axis=1)  # match query tokens
+        out = GLU(N_dim=self.N_dim)(out, cond)
 
-        out_ff = MLPBlock(dim=self.N_dim)(out)
-        out = out + out_ff
-        if self.ln:
-            out = LayerNorm()(out)
 
         return out
 
@@ -235,7 +182,6 @@ class SetTransformerCross(nn.Module):
     n_query: int = 1
     out_dim: Optional[int] = None
     ln: bool = False
-    use_film: bool = True
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t_emb: Optional[jnp.ndarray] = None, theta_emb: Optional[jnp.ndarray] = None) -> jnp.ndarray:
@@ -248,7 +194,7 @@ class SetTransformerCross(nn.Module):
 
         # 2) feed through stacked SABs
         for _ in range(self.depth):
-            x = SAB(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(x, t_emb=t_emb)
+            x = SAB(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, )(x, t_emb=t_emb)
 
         # 3) Prepare queries (theta). If theta_emb is provided, project it; otherwise learn seeds.
         if theta_emb is not None:
@@ -267,11 +213,12 @@ class SetTransformerCross(nn.Module):
             q = jnp.repeat(seeds, B, axis=0)
 
         # 4) Cross-attention: queries attend to particle set
-        q_out = CrossAttentionBlock(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(q, x, t_emb=t_emb)
+        for _ in range(self.depth):
+            q = CrossAttentionBlock(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, )(q, x, t_emb=t_emb)
 
         # 5) optional projection
         if self.out_dim is not None:
-            q_out = Dense(self.out_dim)(q_out)
+            q_out = Dense(self.out_dim)(q)
 
         # If n_query==1, squeeze to (B, out_dim) for convenience
         if self.n_query == 1:
@@ -299,7 +246,6 @@ class SetTransformerPosition_newprior(nn.Module, FlaxModelMixin, ConfigMixin):
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_newprior/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
@@ -341,7 +287,6 @@ class SetTransformerPosition_newprior(nn.Module, FlaxModelMixin, ConfigMixin):
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
@@ -410,7 +355,6 @@ class SetTransformerPosition_uniformprior(nn.Module, FlaxModelMixin, ConfigMixin
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior/preprocess/mean_std_2e5_pointcloud.npz')['mean_x']
@@ -452,7 +396,7 @@ class SetTransformerPosition_uniformprior(nn.Module, FlaxModelMixin, ConfigMixin
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
+
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
@@ -519,7 +463,6 @@ class SetTransformerPosition_uniformprior_30e5(nn.Module, FlaxModelMixin, Config
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior/preprocess/mean_std_3e5_pointcloud.npz')['mean_x']
@@ -561,7 +504,6 @@ class SetTransformerPosition_uniformprior_30e5(nn.Module, FlaxModelMixin, Config
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
@@ -629,7 +571,7 @@ class SetTransformerPosition_uniformprior_TSIT5(nn.Module, FlaxModelMixin, Confi
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
+
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior_TSIT5/preprocess/mean_std_2e5_pointcloud.npz')['mean_x']
@@ -671,7 +613,6 @@ class SetTransformerPosition_uniformprior_TSIT5(nn.Module, FlaxModelMixin, Confi
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
@@ -739,7 +680,6 @@ class SetTransformerPosition_uniformprior_error(nn.Module, FlaxModelMixin, Confi
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior/preprocess/mean_std_2e5_pointcloud.npz')['mean_x']
@@ -781,7 +721,6 @@ class SetTransformerPosition_uniformprior_error(nn.Module, FlaxModelMixin, Confi
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
@@ -861,7 +800,6 @@ class SetTransformerPosition_fixposition_uniformprior_TSIT5(nn.Module, FlaxModel
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
@@ -880,7 +818,7 @@ class SetTransformerPosition_fixposition_uniformprior_TSIT5(nn.Module, FlaxModel
         return self.init(rngs, timesteps=timesteps, sample=encoder_hidden_states, encoder_hidden_states=sample)["params"]
 
     def setup(self) -> None:
-        time_embed_dim = self.N_dim * 4
+        time_embed_dim = self.N_dim 
 
         # time
         self.time_proj = FlaxTimesteps(
@@ -903,7 +841,6 @@ class SetTransformerPosition_fixposition_uniformprior_TSIT5(nn.Module, FlaxModel
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
@@ -975,7 +912,6 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
     dtype: jnp.dtype = jnp.float32
     flip_sin_to_cos: bool = True
     freq_shift: int = 0
-    use_film: bool = True
 
     # these paths/arrays can be set externally; provided here for compatibility
     mean_pointcloud = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_pointcloud.npz')['mean_x']
@@ -1017,7 +953,6 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
             n_query=1,
             out_dim=self.dim_flow,
             ln=self.ln,
-            use_film=self.use_film,
         )
 
         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)

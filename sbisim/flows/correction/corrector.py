@@ -16,6 +16,7 @@ from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax.scipy.stats import norm
 from astropy import units as u
 from odisseo.units import CodeUnits
+from jax.experimental import checkify
 
 
 from math import log10
@@ -1650,7 +1651,7 @@ def kde2d_on_grid(x, grid_x, grid_y, bandwidth):
 
 
 
-class CorrectorDifferentiableSimulatorOdisseo_orbit_fitting(nn.Module):
+class CorrectorDifferentiableSimulatorOdisseo_fixposition_orbit_fitting(nn.Module):
     """
     Corrector model for Odisseo simulator, differentiable version.
     """
@@ -1675,37 +1676,135 @@ class CorrectorDifferentiableSimulatorOdisseo_orbit_fitting(nn.Module):
         code_mass = 1e4 * u.Msun
         code_time = 3 * u.Gyr
         self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
-        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior_TSIT5/preprocess/mean_std_2e5_parameter.npz')['mean_theta']
-        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_uniform_prior_TSIT5/preprocess/mean_std_2e5_parameter.npz')['std_theta']
+        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['mean_theta']
+        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['std_theta']
 
     def __call__(self, t, theta, context, train=True):
 
         return self.forward(t, theta, context, train=train)[0]
 
     def NLL(self, theta_1, target):
+        stream_data = target
+
+        # stream_data = target[(target[:, :, 1] > -100) & (target[:, :, 1] < 25)]
+        coord_indices = jnp.array([2, 3, 4, 5])
 
 
+        phi1_min, phi1_max = -100, 25
+        phi2_min, phi2_max = -8, 2
         simulator_rng = self.make_rng('simulator')
         # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
         stream_coordinate_com, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
                                         rng=simulator_rng, deterministic=True, )  # noqa
+        
+        stream_coordinate_com_backward, stream_coordinate_com_forward = stream_coordinate_com[0], stream_coordinate_com[1]
+        
+        # Create masks for valid time steps
+        mask_window_backward = (stream_coordinate_com_backward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_backward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_backward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_backward[:, 0, 2] > phi2_min)
+        
+        mask_diff_backward = jnp.ediff1d(stream_coordinate_com_backward[:, 0, 1], to_begin=1) > 0
+        # New mask - True until first False appears
+        mask_diff_backward = jnp.cumprod(mask_diff_backward, dtype=bool)
 
-        mask = target[:, 1]>stream_coordinate_com[0, :, 1]
-        interp_stream_track = jnp.interp(
-            target[:, 1], 
-            stream_coordinate_com[:30, :, 1].ravel(), 
-            stream_coordinate_com[:30, :, 2].ravel()
-        )
+
+        mask_window_forward = (stream_coordinate_com_forward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_forward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_forward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_forward[:, 0, 2] > phi2_min)
         
-        # Calculate residuals only for valid points
-        residuals = jnp.where(mask, target[:, 2] - interp_stream_track, 0.0)
-        n_valid = jnp.sum(mask)  # Number of valid data points
-        sigma = 0.1  # Assumed observational uncertainty
-        # Gaussian log-likelihood: ln L = -0.5 * [chi2 + N*ln(2π*σ²)]
-        chi2 = jnp.sum(residuals**2) / sigma**2
-        log_likelihood = -0.5 * (chi2 + n_valid * jnp.log(2 * jnp.pi * sigma**2))
+        mask_diff_forward = jnp.ediff1d(stream_coordinate_com_forward[:, 0, 1], to_begin=-1) < 0
+        mask_diff_forward = jnp.cumprod(mask_diff_forward, dtype=bool)
+
+        mask_backward = mask_window_backward & mask_diff_backward
+        mask_forward = mask_window_forward & mask_diff_forward
+
+
+        def coord_backward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.max(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmax(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        def coord_forward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.min(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmin(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        phi1_backward_valid, coord_backward_valid = jax.vmap(lambda coordinate: coord_backward_fill(stream_coordinate_com_backward[:, 0, 1], stream_coordinate_com_backward[:, 0, coordinate], mask_backward))(coordinate=coord_indices)
+        phi1_forward_valid, coord_forw_valid = jax.vmap(lambda coordinate: coord_forward_fill(stream_coordinate_com_forward[:, 0, 1], stream_coordinate_com_forward[:, 0, coordinate], mask_forward))(coordinate=coord_indices)
+
+
+        def interpolate_coord_backward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_backward_valid[0], coord)
         
-        return -log_likelihood
+        def interpolate_coord_forward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_forward_valid[0][::-1], coord[::-1])
+            
+
+        # Apply interpolation to all coordinates
+        interp_tracks_backward = jax.vmap(interpolate_coord_backward)(coord_backward_valid)  # Shape: (n_coords, n_data)
+        interp_tracks_forward = jax.vmap(interpolate_coord_forward)(coord_forw_valid)  # Shape: (n_coords, n_data)
+
+        # Calculate residuals for all coordinates
+        data_coords = stream_data[:, coord_indices].T  # Shape: (n_coords, n_data)
+        sigma = jnp.array([0.5, 10., 2., 2. ])
+        # sigma = jnp.array([0.15, 5., 0.1, 0.0001]) #from albatross
+
+        mask_correct_interpolation_backward = stream_data[:, 1] < 25
+        mask_correct_interpolation_forward = stream_data[:, 1] > - 100
+
+        # Stream data masks - which data points to use for each direction
+        mask_stream_backward = stream_data[:, 1] > stream_coordinate_com_backward[0, 0, 1]
+        mask_stream_forward = stream_data[:, 1] < stream_coordinate_com_forward[0, 0, 1]
+
+        mask_evaluate_inside_track_backward = (stream_data[:, 1] < jnp.max(phi1_backward_valid)) & (stream_data[:, 1] < phi1_max)
+        mask_evaluate_inside_track_forward = (stream_data[:, 1] > jnp.min(phi1_forward_valid)) & (stream_data[:, 1] > phi1_min)
+
+        # Calculate chi2 using only the appropriate data points for each direction
+        residuals_backward = jnp.where(mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward, 
+                                    (data_coords - interp_tracks_backward)/sigma[:, None],
+                                    1.)
+        residuals_forward = jnp.where(mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward, 
+                                    (data_coords - interp_tracks_forward)/sigma[:, None],
+                                    1.)
+        residuals = jnp.where(mask_stream_backward,
+                            residuals_backward,
+                            residuals_forward)
+        # Masks for valid residuals
+        mask_backward_full = mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward
+        mask_forward_full = mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward
+        
+        # Count valid data points PER COORDINATE
+        mask_used = jnp.where(mask_stream_backward[:, None],
+                            mask_backward_full[:, None],  # Broadcast to (n_data, 1)
+                            mask_forward_full[:, None])
+        
+        # Total number of valid measurements across all coordinates
+        n_valid_measurements = jnp.sum(mask_used)  # Counts True values in (n_data, 4) array
+        
+        # Number of free parameters being fit
+        n_params = theta_1.shape[-1]  # Should be 7 for your model
+        
+        # Degrees of freedom
+        dof = n_valid_measurements - n_params
+        
+        # Ensure DOF is positive (if not enough data, penalize heavily)
+        dof = jnp.maximum(dof, 1.0)  # Avoid division by zero
+        
+        # Chi-squared (sum of squared residuals)
+        chi2 = jnp.sum(residuals**2)
+        
+        # Reduced chi-squared
+        chi2_reduced = chi2 / dof
+        
+        return chi2_reduced
+       
 
 
     def forward_flow(self, t, theta, context, train=False):
@@ -1727,25 +1826,16 @@ class CorrectorDifferentiableSimulatorOdisseo_orbit_fitting(nn.Module):
         
 
         theta_1 = theta_1 * self.std_X + self.mean_X
-        theta_1 = theta_1.at[:, 0].set(theta_1[:, 0] * u.Gyr.to(self.code_units.code_time))
-        theta_1 = theta_1.at[:, 1].set((10**theta_1[:, 1]) * u.Msun.to(self.code_units.code_mass))
-        theta_1 = theta_1.at[:, 2].set(theta_1[:, 2] * u.kpc.to(self.code_units.code_length))
-        theta_1 = theta_1.at[:, 3].set((10**theta_1[:, 3]) * u.Msun.to(self.code_units.code_mass))
-        theta_1 = theta_1.at[:, 4].set(theta_1[:, 4] * u.kpc.to(self.code_units.code_length))
-        theta_1 = theta_1.at[:, 5].set((10**theta_1[:, 5]) * u.Msun.to(self.code_units.code_mass))
-        theta_1 = theta_1.at[:, 6].set(theta_1[:, 6] * u.kpc.to(self.code_units.code_length))
 
         # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
         grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        # context = context[(context[:, :, 1] > -100) & (context[:, :, 1] < 25)]
         loss, grad = grad_fn(theta_1, context)
-        # print('loss:', loss)
-        # print('grad:', grad)
-
-        # grad = grad / jnp.linalg.norm(grad, axis=1, keepdims=True)
-
-        # print('normalized grad:', grad)
 
         loss = jnp.expand_dims(loss, axis=1)
+        loss = jnp.log10(loss/1e3)
+        print('loss:', loss)
+        print('grad:', grad)
 
         output = jnp.concatenate([loss, grad], axis=1)
         output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
@@ -1761,3 +1851,819 @@ class CorrectorDifferentiableSimulatorOdisseo_orbit_fitting(nn.Module):
                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
 
         return drift, output
+
+
+# class CorrectorDifferentiableSimulatorOdisseo_fixposition_orbit_fitting_andpointcloud(nn.Module):
+#     """
+#     Corrector model for Odisseo simulator, differentiable version.
+#     """
+
+#     model: nn.Module
+#     simulator: dict
+#     controlled_flow: dict
+#     aggregation: dict
+#     freeze: bool = True
+#     layer_norm: bool = False
+#     start_time: float = 1.0
+#     num_simulations: int = 1
+#     clip_output: float = 10.0
+#     sharding: bool = False
+
+#     def setup(self):
+
+#         self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+#         self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+#         self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+#         code_length = 10.0 * u.kpc
+#         code_mass = 1e4 * u.Msun
+#         code_time = 3 * u.Gyr
+#         self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+#         self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['mean_theta']
+#         self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['std_theta']
+
+#     def __call__(self, t, theta, context, train=True):
+
+#         return self.forward(t, theta, context, train=train)[0]
+
+#     def NLL(self, theta_1, target):
+#         theta_1 = 10**theta_1
+#         theta_1 = theta_1.at[0].set(theta_1[0] * u.Msun.to(self.code_units.code_mass))
+#         theta_1 = theta_1.at[1].set(theta_1[1] * u.kpc.to(self.code_units.code_length))
+#         theta_1 = theta_1.at[2].set(theta_1[2] * u.Msun.to(self.code_units.code_mass))
+#         theta_1 = theta_1.at[3].set(theta_1[3] * u.kpc.to(self.code_units.code_length))
+#         theta_1 = theta_1.at[4].set(theta_1[4] * u.kpc.to(self.code_units.code_length))
+#         theta_1 = theta_1.at[5].set(theta_1[5] * u.Msun.to(self.code_units.code_mass))
+#         theta_1 = theta_1.at[6].set(theta_1[6] * u.kpc.to(self.code_units.code_length))
+#         stream_data = target
+#         coord_indices = jnp.array([2, 3, 4, 5])
+
+#         phi1_min, phi1_max = -100, 25
+#         phi2_min, phi2_max = -8, 2
+#         simulator_rng = self.make_rng('simulator')
+#         # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+#         stream_coordinate_com, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+#                                         rng=simulator_rng, deterministic=True, stream=False)  
+        
+#         stream_coordinate_com_backward, stream_coordinate_com_forward = stream_coordinate_com[0], stream_coordinate_com[1]
+        
+#         # Create masks for valid time steps
+#         mask_window_backward = (stream_coordinate_com_backward[:, 0, 1] < phi1_max) & \
+#                             (stream_coordinate_com_backward[:, 0, 1] > phi1_min) & \
+#                             (stream_coordinate_com_backward[:, 0, 2] < phi2_max) & \
+#                             (stream_coordinate_com_backward[:, 0, 2] > phi2_min)
+        
+#         mask_diff_backward = jnp.ediff1d(stream_coordinate_com_backward[:, 0, 1], to_begin=1) > 0
+#         # New mask - True until first False appears
+#         mask_diff_backward = jnp.cumprod(mask_diff_backward, dtype=bool)
+
+
+#         mask_window_forward = (stream_coordinate_com_forward[:, 0, 1] < phi1_max) & \
+#                             (stream_coordinate_com_forward[:, 0, 1] > phi1_min) & \
+#                             (stream_coordinate_com_forward[:, 0, 2] < phi2_max) & \
+#                             (stream_coordinate_com_forward[:, 0, 2] > phi2_min)
+        
+#         mask_diff_forward = jnp.ediff1d(stream_coordinate_com_forward[:, 0, 1], to_begin=-1) < 0
+#         mask_diff_forward = jnp.cumprod(mask_diff_forward, dtype=bool)
+
+#         mask_backward = mask_window_backward & mask_diff_backward
+#         mask_forward = mask_window_forward & mask_diff_forward
+
+
+#         def coord_backward_fill(arr_phi1, arr_coord, mask):
+#             arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+#             filled = jnp.where(arr_phi1_masked == 0., jnp.max(arr_phi1_masked), arr_phi1_masked)
+#             arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+#             filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmax(filled)], arr_coord_masked)
+#             return filled, filled_coord
+
+#         def coord_forward_fill(arr_phi1, arr_coord, mask):
+#             arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+#             filled = jnp.where(arr_phi1_masked == 0., jnp.min(arr_phi1_masked), arr_phi1_masked)
+#             arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+#             filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmin(filled)], arr_coord_masked)
+#             return filled, filled_coord
+
+#         phi1_backward_valid, coord_backward_valid = jax.vmap(lambda coordinate: coord_backward_fill(stream_coordinate_com_backward[:, 0, 1], stream_coordinate_com_backward[:, 0, coordinate], mask_backward))(coordinate=coord_indices)
+#         phi1_forward_valid, coord_forw_valid = jax.vmap(lambda coordinate: coord_forward_fill(stream_coordinate_com_forward[:, 0, 1], stream_coordinate_com_forward[:, 0, coordinate], mask_forward))(coordinate=coord_indices)
+
+
+#         def interpolate_coord_backward(coord):
+#             return jnp.interp(stream_data[:, 1], phi1_backward_valid[0], coord)
+        
+#         def interpolate_coord_forward(coord):
+#             return jnp.interp(stream_data[:, 1], phi1_forward_valid[0][::-1], coord[::-1])
+            
+
+#         # Apply interpolation to all coordinates
+#         interp_tracks_backward = jax.vmap(interpolate_coord_backward)(coord_backward_valid)  # Shape: (n_coords, n_data)
+#         interp_tracks_forward = jax.vmap(interpolate_coord_forward)(coord_forw_valid)  # Shape: (n_coords, n_data)
+
+#         # Calculate residuals for all coordinates
+#         data_coords = stream_data[:, coord_indices].T  # Shape: (n_coords, n_data)
+#         sigma = jnp.array([0.5, 10., 2., 2. ])
+#         # sigma = jnp.array([0.15, 5., 0.1, 0.0001]) #from albatross
+
+#         mask_correct_interpolation_backward = stream_data[:, 1] < 25
+#         mask_correct_interpolation_forward = stream_data[:, 1] > - 100
+
+#         # Stream data masks - which data points to use for each direction
+#         mask_stream_backward = stream_data[:, 1] > stream_coordinate_com_backward[0, 0, 1]
+#         mask_stream_forward = stream_data[:, 1] < stream_coordinate_com_forward[0, 0, 1]
+
+#         mask_evaluate_inside_track_backward = (stream_data[:, 1] < jnp.max(phi1_backward_valid)) & (stream_data[:, 1] < phi1_max)
+#         mask_evaluate_inside_track_forward = (stream_data[:, 1] > jnp.min(phi1_forward_valid)) & (stream_data[:, 1] > phi1_min)
+
+#         # Calculate chi2 using only the appropriate data points for each direction
+#         residuals_backward = jnp.where(mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward, 
+#                                     (data_coords - interp_tracks_backward)/sigma[:, None],
+#                                     1.)
+#         residuals_forward = jnp.where(mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward, 
+#                                     (data_coords - interp_tracks_forward)/sigma[:, None],
+#                                     1.)
+#         residuals = jnp.where(mask_stream_backward,
+#                             residuals_backward,
+#                             residuals_forward)
+#         # Masks for valid residuals
+#         mask_backward_full = mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward
+#         mask_forward_full = mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward
+        
+#         # Count valid data points PER COORDINATE
+#         mask_used = jnp.where(mask_stream_backward[:, None],
+#                             mask_backward_full[:, None],  # Broadcast to (n_data, 1)
+#                             mask_forward_full[:, None])
+        
+#         # Total number of valid measurements across all coordinates
+#         n_valid_measurements = jnp.sum(mask_used)  # Counts True values in (n_data, 4) array
+        
+#         # Number of free parameters being fit
+#         n_params = theta_1.shape[-1]  # Should be 7 for your model
+        
+#         # Degrees of freedom
+#         dof = n_valid_measurements  #- n_params
+        
+#         # Ensure DOF is positive (if not enough data, penalize heavily)
+#         dof = jnp.maximum(dof, 1.0)  # Avoid division by zero
+        
+#         # Chi-squared (sum of squared residuals)
+#         chi2 = jnp.sum(residuals**2)
+        
+#         # Reduced chi-squared
+#         chi2_reduced = chi2 / dof
+        
+#         return jnp.log10(chi2)
+       
+
+
+#     def forward_flow(self, t, theta, context, train=False):
+
+#         # we need this because self.model was trained with stacked flow which has additional time dimensions
+#         return self.model(t, theta, context, train=train)
+
+#     def forward(self, t, theta, context, train=True):
+
+#         # predict flow
+#         flow_pred = self.model(t, theta, context, train=train)
+
+#         if self.freeze:
+#             flow_pred = stop_gradient(flow_pred)
+
+#         # print(theta.shape)
+
+#         theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+        
+
+#         theta_1_sim = theta_1 * self.std_X + self.mean_X
+
+#         # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+#         grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+#         loss, grad = grad_fn(theta_1_sim, context)
+
+#         loss = jnp.expand_dims(loss, axis=1)
+#         print(loss)
+#         print(grad)
+
+#         # jax.debug.print('loss: {value}', value = jnp.isnan(loss).sum())
+#         # jax.debug.print('grad: {value}', value = jnp.isnan(grad).sum())
+
+#         output = jnp.concatenate([loss, grad], axis=1)
+#         output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+
+#         simulator_rng = self.make_rng('simulator')
+#         stream, _ = jax.vmap(lambda theta: self.simulator_impl(theta, num_simulations=self.num_simulations,
+#                                         rng=simulator_rng, deterministic=True, stream=True))(theta_1_sim)     
+#         # jax.debug.print('stream: {value}', value = jnp.isnan(stream).sum())
+
+#         drift = flow_pred + self.controlled_flow_impl(sample=theta_1, timesteps=t, encoder_hidden_states=stream, loss_grad=output, ) 
+#         # errors = checkify.user_checks | checkify.index_checks | checkify.float_checks | checkify.nan_checks
+#         # controlled_flow_to_be_checked = lambda  flow_pred, t, stream, output: self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=stream, loss_grad=output, )
+        
+#         # checkify.checkify(controlled_flow_to_be_checked, errors=errors)(flow_pred, t, stream, output)
+#         # drift = flow_pred + checkify.checkify(controlled_flow_to_be_checked, errors=errors)(flow_pred, t, stream, output)[1]
+
+
+#         drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+#                  jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+#         return drift, output
+    
+
+
+class CorrectorDifferentiableSimulatorOdisseo_fixposition_orbit_fitting_andpointcloud(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+        code_length = 10.0 * u.kpc
+        code_mass = 1e4 * u.Msun
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['mean_theta']
+        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_fix_position_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['std_theta']
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+        theta_1 = 10**theta_1
+        theta_1 = theta_1.at[0].set(theta_1[0] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[1].set(theta_1[1] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[2].set(theta_1[2] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[3].set(theta_1[3] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[4].set(theta_1[4] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[5].set(theta_1[5] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[6].set(theta_1[6] * u.kpc.to(self.code_units.code_length))
+        stream_data = target
+        coord_indices = jnp.array([2, 3, 4, 5])
+
+        phi1_min, phi1_max = -90, 10
+        phi2_min, phi2_max = -8, 2
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        stream_coordinate_com, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, stream=False)  
+        
+        stream_coordinate_com_backward, stream_coordinate_com_forward = stream_coordinate_com[0], stream_coordinate_com[1]
+        
+        # Create masks for valid time steps
+        mask_window_backward = (stream_coordinate_com_backward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_backward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_backward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_backward[:, 0, 2] > phi2_min)
+        
+        mask_diff_backward = jnp.ediff1d(stream_coordinate_com_backward[:, 0, 1], to_begin=1) > 0
+        # New mask - True until first False appears
+        mask_diff_backward = jnp.cumprod(mask_diff_backward, dtype=bool)
+
+
+        mask_window_forward = (stream_coordinate_com_forward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_forward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_forward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_forward[:, 0, 2] > phi2_min)
+        
+        mask_diff_forward = jnp.ediff1d(stream_coordinate_com_forward[:, 0, 1], to_begin=-1) < 0
+        mask_diff_forward = jnp.cumprod(mask_diff_forward, dtype=bool)
+
+        mask_backward = mask_window_backward & mask_diff_backward
+        mask_forward = mask_window_forward & mask_diff_forward
+
+
+        def coord_backward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.max(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmax(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        def coord_forward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.min(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmin(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        phi1_backward_valid, coord_backward_valid = jax.vmap(lambda coordinate: coord_backward_fill(stream_coordinate_com_backward[:, 0, 1], stream_coordinate_com_backward[:, 0, coordinate], mask_backward))(coordinate=coord_indices)
+        phi1_forward_valid, coord_forw_valid = jax.vmap(lambda coordinate: coord_forward_fill(stream_coordinate_com_forward[:, 0, 1], stream_coordinate_com_forward[:, 0, coordinate], mask_forward))(coordinate=coord_indices)
+
+
+        def interpolate_coord_backward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_backward_valid[0], coord)
+        
+        def interpolate_coord_forward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_forward_valid[0][::-1], coord[::-1])
+            
+
+        # Apply interpolation to all coordinates
+        interp_tracks_backward = jax.vmap(interpolate_coord_backward)(coord_backward_valid)  # Shape: (n_coords, n_data)
+        interp_tracks_forward = jax.vmap(interpolate_coord_forward)(coord_forw_valid)  # Shape: (n_coords, n_data)
+
+        # Calculate residuals for all coordinates
+        data_coords = stream_data[:, coord_indices].T  # Shape: (n_coords, n_data)
+        sigma = jnp.array([0.5, 10., 2., 2. ])
+        # sigma = jnp.array([0.15, 5., 0.1, 0.0001]) #from albatross
+
+        mask_correct_interpolation_backward = stream_data[:, 1] < 10
+        mask_correct_interpolation_forward = stream_data[:, 1] > - 90
+
+        # Stream data masks - which data points to use for each direction
+        mask_stream_backward = stream_data[:, 1] > stream_coordinate_com_backward[0, 0, 1]
+        mask_stream_forward = stream_data[:, 1] < stream_coordinate_com_forward[0, 0, 1]
+
+        mask_evaluate_inside_track_backward = (stream_data[:, 1] < jnp.max(phi1_backward_valid)) & (stream_data[:, 1] < phi1_max)
+        mask_evaluate_inside_track_forward = (stream_data[:, 1] > jnp.min(phi1_forward_valid)) & (stream_data[:, 1] > phi1_min)
+
+        # Calculate chi2 using only the appropriate data points for each direction
+        residuals_backward = jnp.where(mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward, 
+                                    (data_coords - interp_tracks_backward)/sigma[:, None],
+                                    0.)
+        residuals_forward = jnp.where(mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward, 
+                                    (data_coords - interp_tracks_forward)/sigma[:, None],
+                                    0.)
+        residuals = jnp.where(mask_stream_backward,
+                            residuals_backward,
+                            residuals_forward)
+        # Masks for valid residuals
+        mask_backward_full = mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward
+        mask_forward_full = mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward
+        
+        # Count valid data points PER COORDINATE
+        mask_used = jnp.where(mask_stream_backward[:, None],
+                            mask_backward_full[:, None],  # Broadcast to (n_data, 1)
+                            mask_forward_full[:, None])
+        
+        
+        
+        # Chi-squared (sum of squared residuals)
+        chi2 = jnp.sum(residuals**2)
+        
+        # Reduced chi-squared
+        
+        return chi2
+       
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        # print(theta.shape)
+
+        theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+        
+
+        theta_1_sim = theta_1 * self.std_X + self.mean_X
+
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        loss, grad = grad_fn(theta_1_sim, context)
+
+        loss = jnp.expand_dims(loss, axis=1)
+        # print(loss)
+        # print(grad)
+
+        # jax.debug.print('loss: {value}', value = jnp.isnan(loss).sum())
+        # jax.debug.print('grad: {value}', value = jnp.isnan(grad).sum())
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+
+        simulator_rng = self.make_rng('simulator')
+        stream, _ = jax.vmap(lambda theta: self.simulator_impl(theta, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, stream=True))(theta_1_sim)     
+        # jax.debug.print('stream: {value}', value = jnp.isnan(stream).sum())
+
+        drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=stream, loss_grad=output, ) 
+        # errors = checkify.user_checks | checkify.index_checks | checkify.float_checks | checkify.nan_checks
+        # controlled_flow_to_be_checked = lambda  flow_pred, t, stream, output: self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=stream, loss_grad=output, )
+        
+        # checkify.checkify(controlled_flow_to_be_checked, errors=errors)(flow_pred, t, stream, output)
+        # drift = flow_pred + checkify.checkify(controlled_flow_to_be_checked, errors=errors)(flow_pred, t, stream, output)[1]
+
+
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output
+    
+class CorrectorDifferentiableSimulatorOdisseoPositions_fixtime_orbit_fitting_andpointcloud(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+        code_length = 10.0 * u.kpc
+        code_mass = 1e4 * u.Msun
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['mean_theta']
+        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['std_theta']
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+        theta_1 = theta_1.at[0].set(10**theta_1[0] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[1].set(10**theta_1[1] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[2].set(10**theta_1[2] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[3].set(10**theta_1[3] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[4].set(10**theta_1[4] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[5].set(10**theta_1[5] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[6].set(10**theta_1[6] * u.kpc.to(self.code_units.code_length))
+        stream_data = target
+        coord_indices = jnp.array([2, 3, 4, 5])
+
+        phi1_min, phi1_max = -90, 10
+        phi2_min, phi2_max = -8, 2
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        stream_coordinate_com, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, stream=False)  
+        
+        stream_coordinate_com_backward, stream_coordinate_com_forward = stream_coordinate_com[0], stream_coordinate_com[1]
+        
+        # Create masks for valid time steps
+        mask_window_backward = (stream_coordinate_com_backward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_backward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_backward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_backward[:, 0, 2] > phi2_min)
+        
+        mask_diff_backward = jnp.ediff1d(stream_coordinate_com_backward[:, 0, 1], to_begin=1) > 0
+        # New mask - True until first False appears
+        mask_diff_backward = jnp.cumprod(mask_diff_backward, dtype=bool)
+
+
+        mask_window_forward = (stream_coordinate_com_forward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_forward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_forward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_forward[:, 0, 2] > phi2_min)
+        
+        mask_diff_forward = jnp.ediff1d(stream_coordinate_com_forward[:, 0, 1], to_begin=-1) < 0
+        mask_diff_forward = jnp.cumprod(mask_diff_forward, dtype=bool)
+
+        mask_backward = mask_window_backward & mask_diff_backward
+        mask_forward = mask_window_forward & mask_diff_forward
+
+
+        def coord_backward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.max(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmax(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        def coord_forward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.min(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmin(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        phi1_backward_valid, coord_backward_valid = jax.vmap(lambda coordinate: coord_backward_fill(stream_coordinate_com_backward[:, 0, 1], stream_coordinate_com_backward[:, 0, coordinate], mask_backward))(coordinate=coord_indices)
+        phi1_forward_valid, coord_forw_valid = jax.vmap(lambda coordinate: coord_forward_fill(stream_coordinate_com_forward[:, 0, 1], stream_coordinate_com_forward[:, 0, coordinate], mask_forward))(coordinate=coord_indices)
+
+
+        def interpolate_coord_backward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_backward_valid[0], coord)
+        
+        def interpolate_coord_forward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_forward_valid[0][::-1], coord[::-1])
+            
+
+        # Apply interpolation to all coordinates
+        interp_tracks_backward = jax.vmap(interpolate_coord_backward)(coord_backward_valid)  # Shape: (n_coords, n_data)
+        interp_tracks_forward = jax.vmap(interpolate_coord_forward)(coord_forw_valid)  # Shape: (n_coords, n_data)
+
+        # Calculate residuals for all coordinates
+        data_coords = stream_data[:, coord_indices].T  # Shape: (n_coords, n_data)
+        sigma = jnp.array([0.5, 10., 2., 2. ])
+        # sigma = jnp.array([0.15, 5., 0.1, 0.0001]) #from albatross
+
+        mask_correct_interpolation_backward = stream_data[:, 1] < 10
+        mask_correct_interpolation_forward = stream_data[:, 1] > - 90
+
+        # Stream data masks - which data points to use for each direction
+        mask_stream_backward = stream_data[:, 1] > stream_coordinate_com_backward[0, 0, 1]
+        mask_stream_forward = stream_data[:, 1] < stream_coordinate_com_forward[0, 0, 1]
+
+        mask_evaluate_inside_track_backward = (stream_data[:, 1] < jnp.max(phi1_backward_valid)) & (stream_data[:, 1] < phi1_max)
+        mask_evaluate_inside_track_forward = (stream_data[:, 1] > jnp.min(phi1_forward_valid)) & (stream_data[:, 1] > phi1_min)
+
+        # Calculate chi2 using only the appropriate data points for each direction
+        residuals_backward = jnp.where(mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward, 
+                                    (data_coords - interp_tracks_backward)/sigma[:, None],
+                                    0.)
+        residuals_forward = jnp.where(mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward, 
+                                    (data_coords - interp_tracks_forward)/sigma[:, None],
+                                    0.)
+        residuals = jnp.where(mask_stream_backward,
+                            residuals_backward,
+                            residuals_forward)
+        # Masks for valid residuals
+        mask_backward_full = mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward
+        mask_forward_full = mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward
+        
+        # Count valid data points PER COORDINATE
+        mask_used = jnp.where(mask_stream_backward[:, None],
+                            mask_backward_full[:, None],  # Broadcast to (n_data, 1)
+                            mask_forward_full[:, None])
+        
+        
+        
+        # Chi-squared (sum of squared residuals)
+        chi2 = jnp.sum(residuals**2)
+        
+        # Reduced chi-squared
+        
+        return chi2
+       
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        # print(theta.shape)
+
+        theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+        
+
+        theta_1_sim = theta_1 * self.std_X + self.mean_X
+
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        loss, grad = grad_fn(theta_1_sim, context)
+
+        loss = jnp.expand_dims(loss, axis=1)
+        # print(loss)
+        # print(grad)
+
+        # jax.debug.print('loss: {value}', value = jnp.isnan(loss).sum())
+        # jax.debug.print('grad: {value}', value = jnp.isnan(grad).sum())
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+
+
+        simulator_rng = self.make_rng('simulator')
+        stream, _ = jax.vmap(lambda theta: self.simulator_impl(theta, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, stream=True))(theta_1_sim)     
+        # jax.debug.print('stream: {value}', value = jnp.isnan(stream).sum())
+
+        drift = flow_pred + self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=stream, loss_grad=output, ) 
+        # errors = checkify.user_checks | checkify.index_checks | checkify.float_checks | checkify.nan_checks
+        # controlled_flow_to_be_checked = lambda  flow_pred, t, stream, output: self.controlled_flow_impl(sample=flow_pred, timesteps=t, encoder_hidden_states=stream, loss_grad=output, )
+        
+        # checkify.checkify(controlled_flow_to_be_checked, errors=errors)(flow_pred, t, stream, output)
+        # drift = flow_pred + checkify.checkify(controlled_flow_to_be_checked, errors=errors)(flow_pred, t, stream, output)[1]
+
+
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output
+    
+class CorrectorDifferentiableSimulatorOdisseoPositions_fixtime_orbit_fitting(nn.Module):
+    """
+    Corrector model for Odisseo simulator, differentiable version.
+    """
+
+    model: nn.Module
+    simulator: dict
+    controlled_flow: dict
+    aggregation: dict
+    freeze: bool = True
+    layer_norm: bool = False
+    start_time: float = 1.0
+    num_simulations: int = 1
+    clip_output: float = 10.0
+    sharding: bool = False
+
+    def setup(self):
+
+        self.simulator_impl: OdisseoSimulator = instantiate_from_config(self.simulator)
+        self.controlled_flow_impl: nn.Module = instantiate_from_config(self.controlled_flow)
+        self.aggregration_impl: nn.Module = instantiate_from_config(self.aggregation)
+        code_length = 10.0 * u.kpc
+        code_mass = 1e4 * u.Msun
+        code_time = 3 * u.Gyr
+        self.code_units = CodeUnits(code_length, code_mass, G=1, unit_time = code_time )  
+        self.mean_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['mean_theta']
+        self.std_X = jnp.load('/export/data/vgiusepp/odisseo_data/data_varying_position_fixed_time_uniform_prior_TSTIT5/preprocess/mean_std_1e5_parameter.npz')['std_theta']
+
+    def __call__(self, t, theta, context, train=True):
+
+        return self.forward(t, theta, context, train=train)[0]
+
+    def NLL(self, theta_1, target):
+        theta_1 = theta_1.at[0].set(10**theta_1[0] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[1].set(10**theta_1[1] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[2].set(10**theta_1[2] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[3].set(10**theta_1[3] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[4].set(10**theta_1[4] * u.kpc.to(self.code_units.code_length))
+        theta_1 = theta_1.at[5].set(10**theta_1[5] * u.Msun.to(self.code_units.code_mass))
+        theta_1 = theta_1.at[6].set(10**theta_1[6] * u.kpc.to(self.code_units.code_length))
+        stream_data = target
+        coord_indices = jnp.array([2, 3, 4, 5])
+
+        phi1_min, phi1_max = -90, 10
+        phi2_min, phi2_max = -8, 2
+        simulator_rng = self.make_rng('simulator')
+        # print(f"In the corrector: theta_1 shape: {theta_1.shape}, target shape: {target.shape}")
+        stream_coordinate_com, _ = self.simulator_impl(theta_1, num_simulations=self.num_simulations,
+                                        rng=simulator_rng, deterministic=True, stream=False)  
+        
+        stream_coordinate_com_backward, stream_coordinate_com_forward = stream_coordinate_com[0], stream_coordinate_com[1]
+        
+        # Create masks for valid time steps
+        mask_window_backward = (stream_coordinate_com_backward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_backward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_backward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_backward[:, 0, 2] > phi2_min)
+        
+        mask_diff_backward = jnp.ediff1d(stream_coordinate_com_backward[:, 0, 1], to_begin=1) > 0
+        # New mask - True until first False appears
+        mask_diff_backward = jnp.cumprod(mask_diff_backward, dtype=bool)
+
+
+        mask_window_forward = (stream_coordinate_com_forward[:, 0, 1] < phi1_max) & \
+                            (stream_coordinate_com_forward[:, 0, 1] > phi1_min) & \
+                            (stream_coordinate_com_forward[:, 0, 2] < phi2_max) & \
+                            (stream_coordinate_com_forward[:, 0, 2] > phi2_min)
+        
+        mask_diff_forward = jnp.ediff1d(stream_coordinate_com_forward[:, 0, 1], to_begin=-1) < 0
+        mask_diff_forward = jnp.cumprod(mask_diff_forward, dtype=bool)
+
+        mask_backward = mask_window_backward & mask_diff_backward
+        mask_forward = mask_window_forward & mask_diff_forward
+
+
+        def coord_backward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.max(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmax(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        def coord_forward_fill(arr_phi1, arr_coord, mask):
+            arr_phi1_masked = jnp.where(mask, arr_phi1, 0.0)
+            filled = jnp.where(arr_phi1_masked == 0., jnp.min(arr_phi1_masked), arr_phi1_masked)
+            arr_coord_masked = jnp.where(mask, arr_coord, 0.0)
+            filled_coord = jnp.where(arr_coord_masked == 0., arr_coord_masked[jnp.argmin(filled)], arr_coord_masked)
+            return filled, filled_coord
+
+        phi1_backward_valid, coord_backward_valid = jax.vmap(lambda coordinate: coord_backward_fill(stream_coordinate_com_backward[:, 0, 1], stream_coordinate_com_backward[:, 0, coordinate], mask_backward))(coordinate=coord_indices)
+        phi1_forward_valid, coord_forw_valid = jax.vmap(lambda coordinate: coord_forward_fill(stream_coordinate_com_forward[:, 0, 1], stream_coordinate_com_forward[:, 0, coordinate], mask_forward))(coordinate=coord_indices)
+
+
+        def interpolate_coord_backward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_backward_valid[0], coord)
+        
+        def interpolate_coord_forward(coord):
+            return jnp.interp(stream_data[:, 1], phi1_forward_valid[0][::-1], coord[::-1])
+            
+
+        # Apply interpolation to all coordinates
+        interp_tracks_backward = jax.vmap(interpolate_coord_backward)(coord_backward_valid)  # Shape: (n_coords, n_data)
+        interp_tracks_forward = jax.vmap(interpolate_coord_forward)(coord_forw_valid)  # Shape: (n_coords, n_data)
+
+        # Calculate residuals for all coordinates
+        data_coords = stream_data[:, coord_indices].T  # Shape: (n_coords, n_data)
+        sigma = jnp.array([0.5, 10., 2., 2. ])
+        # sigma = jnp.array([0.15, 5., 0.1, 0.0001]) #from albatross
+
+        mask_correct_interpolation_backward = stream_data[:, 1] < 10
+        mask_correct_interpolation_forward = stream_data[:, 1] > - 90
+
+        # Stream data masks - which data points to use for each direction
+        mask_stream_backward = stream_data[:, 1] > stream_coordinate_com_backward[0, 0, 1]
+        mask_stream_forward = stream_data[:, 1] < stream_coordinate_com_forward[0, 0, 1]
+
+        mask_evaluate_inside_track_backward = (stream_data[:, 1] < jnp.max(phi1_backward_valid)) & (stream_data[:, 1] < phi1_max)
+        mask_evaluate_inside_track_forward = (stream_data[:, 1] > jnp.min(phi1_forward_valid)) & (stream_data[:, 1] > phi1_min)
+
+        # Calculate chi2 using only the appropriate data points for each direction
+        residuals_backward = jnp.where(mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward, 
+                                    (data_coords - interp_tracks_backward)/sigma[:, None],
+                                    0.)
+        residuals_forward = jnp.where(mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward, 
+                                    (data_coords - interp_tracks_forward)/sigma[:, None],
+                                    0.)
+        residuals = jnp.where(mask_stream_backward,
+                            residuals_backward,
+                            residuals_forward)
+        # Masks for valid residuals
+        mask_backward_full = mask_stream_backward & mask_evaluate_inside_track_backward & mask_correct_interpolation_backward
+        mask_forward_full = mask_stream_forward & mask_evaluate_inside_track_forward & mask_correct_interpolation_forward
+        
+        # Count valid data points PER COORDINATE
+        mask_used = jnp.where(mask_stream_backward[:, None],
+                            mask_backward_full[:, None],  # Broadcast to (n_data, 1)
+                            mask_forward_full[:, None])
+        
+        
+        
+        # Chi-squared (sum of squared residuals)
+        chi2 = jnp.sum(residuals**2)
+        
+        # Reduced chi-squared
+        
+        return chi2
+       
+
+
+    def forward_flow(self, t, theta, context, train=False):
+
+        # we need this because self.model was trained with stacked flow which has additional time dimensions
+        return self.model(t, theta, context, train=train)
+
+    def forward(self, t, theta, context, train=True):
+
+        # predict flow
+        flow_pred = self.model(t, theta, context, train=train)
+
+        if self.freeze:
+            flow_pred = stop_gradient(flow_pred)
+
+        # print(theta.shape)
+
+        theta_1 = theta + jnp.einsum('ab,a->ab', flow_pred, 1 - t[:, 0])
+        
+
+        theta_1 = theta_1 * self.std_X + self.mean_X
+
+        # print(f"In the corrector (should have a batch_dimension): theta_1 shape: {theta_1.shape}, context shape: {context.shape}")
+        grad_fn = vmap(value_and_grad(self.NLL), in_axes=0)
+        
+        loss, grad = grad_fn(theta_1, context)
+
+        loss = jnp.expand_dims(loss, axis=1)
+
+
+        output = jnp.concatenate([loss, grad], axis=1)
+        # output = jnp.nan_to_num(output).clip(-self.clip_output, self.clip_output)
+        output = jnp.nan_to_num(output)
+
+        output = self.aggregration_impl(output)
+
+        output = jnp.concatenate([flow_pred, t, output], axis=1)
+        # drift = flow_pred + self.controlled_flow_impl(theta=flow_pred, context=output, t=t) # noqa
+        drift = flow_pred + self.controlled_flow_impl(output, context=None) # noqa
+
+
+        drift = (jnp.einsum('ab, a -> ab', drift, t[:, 0] > self.start_time) +
+                 jnp.einsum('ab, a -> ab', flow_pred, t[:, 0] <= self.start_time))
+
+        return drift, output
+    
