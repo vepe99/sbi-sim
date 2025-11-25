@@ -167,3 +167,4 @@ logs/
 # data
 data/
 hydralance/
+*.npz
