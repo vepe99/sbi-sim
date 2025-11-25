@@ -6,13 +6,14 @@ context_dim: 64
 controlled_flow_in_dim: 46
 aggregation_in_dim: 40
 aggregation_out_dim: 32
-start_time: 0.90
+start_time: 0.80
 batch_size: 1000
 weighting: one
 loss_type: fm_ot
 scaling_type: none
 learning_rate: 0.00005
 hidden_dims:
+  - 128
   - 128
   - 128
   - 64
@@ -54,13 +55,13 @@ strategy:
           params:
             sigma_min: 0.0001
     model_pretrained:
-      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5
+      target: sbisim.flows.models.CrossAttentionSetTransformer_GLU.SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5
       params:
         dim_flow: ${dim_flow}
         sample_size: 1000
         N_dim: 128
         N_head: 1
-        depth: 2
+        depth: 4
     weight_file_pretrained: ${weight_file_pretrained}
     model:
       target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoPositions_fixtime_orbit_fitting

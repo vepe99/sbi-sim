@@ -7,7 +7,9 @@ from gc import callbacks
 from pathlib import Path
 from autocvd import autocvd
 autocvd(num_gpus = 1, interval=1)
-# os.environ['CUDA_VISIBLE_DEVICES'] = '1'  
+# os.environ['CUDA_VISIBLE_DEVICES'] = '4, 7'  
+# os.environ['CUDA_VISIBLE_DEVICES'] = '4'  
+
 
 import wandb
 from omegaconf import OmegaConf

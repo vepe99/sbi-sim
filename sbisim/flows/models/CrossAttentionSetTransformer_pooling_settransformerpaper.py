@@ -93,7 +93,71 @@ class FiLM(nn.Module):
             beta = beta.reshape((beta.shape[0],) + tuple(expand_dims) + (beta.shape[-1],))
 
         return gamma * x + beta
+    
+class MAB(nn.Module):
+    N_dim: int
+    N_head: int
+    use_film: bool = True
 
+    @nn.compact
+    def __call__(self, x, y, t_emb: Optional[jnp.ndarray] = None, theta_emb: Optional[jnp.ndarray] = None):
+        """
+        x: (B, N_x, D_in)    -> queries origin
+        y: (B, N_y, D_in)    -> keys/values origin (may include extra tokens)
+        t_emb: (B, D_t) or None
+        theta_emb: (B, D_theta) or None  # will be concatenated as a token into y prior to projections
+        """
+        B = x.shape[0]
+        N_x = x.shape[1]
+        N_y = y.shape[1]
+
+        # If theta_emb is provided, concatenate it as one extra token to y
+        if theta_emb is not None:
+            # project theta to N_dim first (so concatenation is compatible)
+            theta_proj = nn.Dense(self.N_dim, kernel_init=nn.initializers.xavier_uniform())(theta_emb)  # (B, N_dim)
+            theta_proj = theta_proj.squeeze(axis=1)
+            theta_proj = theta_proj[:, None, :]  # (B, 1, N_dim)
+            y = jnp.concatenate([theta_proj, y], axis=1)
+            N_y = y.shape[1]
+
+        dim_split = self.N_dim // self.N_head
+        kernel_init = nn.initializers.variance_scaling(scale=1/3, mode="fan_in", distribution="uniform")
+
+        # Project q/k/v with DenseGeneral -> (B, N, N_head, dim_split)
+        q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
+        k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(y)
+        v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(y)
+
+        # If time embedding is provided: project & broadcast and add to q and k (so time influences attention)
+        if t_emb is not None:
+            # project time to same head-split shape
+            # create per-token t for x and per-key t for y
+            t_proj_for_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N_x, axis=1))
+            t_proj_for_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N_y, axis=1))
+            t_proj_for_v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N_y, axis=1))
+            q = q + t_proj_for_q
+            k = k + t_proj_for_k
+            v = v + t_proj_for_v
+
+        # dot-product attention: returns (B, N_x, N_head, dim_split)
+        a = dot_product_attention(q, k, v)  # uses scaled dot-prod across heads
+
+        # residual + reshape to (B, N_x, N_dim)
+        out  = (a + q).reshape(B, N_x, self.N_dim)
+
+        out = LayerNorm()(out)
+
+        # FiLM modulation (apply before FFN)
+        if self.use_film and t_emb is not None:
+            out = FiLM(out_dim=self.N_dim)(out, t_emb)
+        
+        # FF
+        out_ff = MLPBlock(dim=self.N_dim)(out)
+        out = out + out_ff
+
+        out = LayerNorm()(out)
+
+        return out
 
 class SAB(nn.Module):
     """Self-attention block for sets. Optionally uses time embedding and FiLM.
@@ -117,36 +181,67 @@ class SAB(nn.Module):
         k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
         v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
 
+                # If time embedding is provided: project & broadcast and add to q and k (so time influences attention)
         if t_emb is not None:
-            # project t_emb to same head-split shape and broadcast
-            t_proj_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
-                jnp.repeat(t_emb[:, None, :], N, axis=1)
-            )
-            t_proj_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
-                jnp.repeat(t_emb[:, None, :], N, axis=1)
-            )
-            q = q + t_proj_q
-            k = k + t_proj_k
+            # project time to same head-split shape
+            # create per-token t for x and per-key t for y
+            t_proj_for_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N, axis=1))
+            t_proj_for_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N, axis=1))
+            t_proj_for_v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N, axis=1))
+            q = q + t_proj_for_q
+            k = k + t_proj_for_k
+            v = v + t_proj_for_v
 
-        a = dot_product_attention(q, k, v)  # (B, N, N_head, dim_split)
-        out = a.reshape(B, N, self.N_dim)
+        # dot-product attention: returns (B, N_x, N_head, dim_split)
+        a = dot_product_attention(q, k, v)  # uses scaled dot-prod across heads
 
-        # residual
-        out = out + x
-        if self.ln:
-            out = LayerNorm()(out)
+        # residual + reshape to (B, N_x, N_dim)
+        out  = (a + q).reshape(B, N, self.N_dim)
+
+        out = LayerNorm()(out)
 
         # FiLM modulation (apply before FFN)
         if self.use_film and t_emb is not None:
             out = FiLM(out_dim=self.N_dim)(out, t_emb)
-
+        
         # FF
         out_ff = MLPBlock(dim=self.N_dim)(out)
         out = out + out_ff
-        if self.ln:
-            out = LayerNorm()(out)
+
+        out = LayerNorm()(out)
 
         return out
+    
+class PMA(nn.Module):
+    """ Implementation of the 'Pooling by Multihead Attention'.
+
+    Parameters
+    ----------
+    N_dim : int
+        element-wise size of the output 
+
+    N_head : int
+        number of attention heads, must be a divisor of N_dim
+        
+    N_seed: int
+        number of 'seed vectors'
+
+    ln : bool
+        if set to False, there is no layer normalization applied
+        default: False
+    """
+    N_dim: int
+    N_head: int
+    N_seed: int
+        
+    @nn.compact
+    def __call__(self, x, t_emb: Optional[jnp.ndarray] = None):
+        N_batch = x.shape[0]
+        s = self.param("seeds", nn.initializers.xavier_uniform(), (1,self.N_seed,self.N_dim))
+        s = jnp.repeat(s, N_batch,axis=0).reshape((N_batch,self.N_seed,self.N_dim))
+        
+        return MAB(N_dim = self.N_dim,
+                   N_head = self.N_head)(s, x)
 
 
 class CrossAttentionBlock(nn.Module):
@@ -182,24 +277,27 @@ class CrossAttentionBlock(nn.Module):
             t_proj_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
                 jnp.repeat(t_emb[:, None, :], N, axis=1)
             )
+            t_proj_v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(
+                jnp.repeat(t_emb[:, None, :], N, axis=1)
+            )
             q = q + t_proj_q
             k = k + t_proj_k
+            v = v + t_proj_v
 
         a = dot_product_attention(q, k, v)  # (B, n_query, N_head, dim_split)
-        out = a.reshape(B, n_query, self.N_dim)
+        out = (a + q).reshape(B, n_query, self.N_dim)
 
-        out = out + x
-        if self.ln:
-            out = LayerNorm()(out)
+        out = LayerNorm()(out)
 
-        # FiLM modulation
+        # FiLM modulation (apply before FFN)
         if self.use_film and t_emb is not None:
             out = FiLM(out_dim=self.N_dim)(out, t_emb)
-
+        
+        # FF
         out_ff = MLPBlock(dim=self.N_dim)(out)
         out = out + out_ff
-        if self.ln:
-            out = LayerNorm()(out)
+
+        out = LayerNorm()(out)
 
         return out
 
@@ -231,6 +329,7 @@ class SetTransformerCross(nn.Module):
 
     N_dim: int
     N_head: int
+    N_seed: int = 1
     depth: int = 2
     n_query: int = 1
     out_dim: Optional[int] = None
@@ -249,6 +348,10 @@ class SetTransformerCross(nn.Module):
         # 2) feed through stacked SABs
         for _ in range(self.depth):
             x = SAB(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(x, t_emb=t_emb)
+        
+        #Pooling
+        x = PMA(N_dim=self.N_dim, N_head=self.N_head, N_seed=self.N_seed, )(x, t_emb=t_emb)
+        x = SAB(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(x, t_emb=t_emb)
 
         # 3) Prepare queries (theta). If theta_emb is provided, project it; otherwise learn seeds.
         if theta_emb is not None:
@@ -267,7 +370,8 @@ class SetTransformerCross(nn.Module):
             q = jnp.repeat(seeds, B, axis=0)
 
         # 4) Cross-attention: queries attend to particle set
-        q_out = CrossAttentionBlock(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(q, x, t_emb=t_emb)
+        for _ in range(self.depth):
+            q_out = CrossAttentionBlock(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(q, x, t_emb=t_emb)
 
         # 5) optional projection
         if self.out_dim is not None:
@@ -624,6 +728,7 @@ class SetTransformerPosition_uniformprior_TSIT5(nn.Module, FlaxModelMixin, Confi
     dim_flow: int = 7
     N_dim: int = 64
     N_head: int = 8
+    N_seed: int = 1
     depth: int = 3
     ln: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -667,6 +772,7 @@ class SetTransformerPosition_uniformprior_TSIT5(nn.Module, FlaxModelMixin, Confi
         self.SetTransformerEncoder = SetTransformerCross(
             N_dim=self.N_dim,
             N_head=self.N_head,
+            N_seed=self.N_seed, 
             depth=self.depth,
             n_query=1,
             out_dim=self.dim_flow,
@@ -970,6 +1076,7 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
     dim_flow: int = 7
     N_dim: int = 64
     N_head: int = 8
+    N_seed = 1
     depth: int = 3
     ln: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -1013,6 +1120,7 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
         self.SetTransformerEncoder = SetTransformerCross(
             N_dim=self.N_dim,
             N_head=self.N_head,
+            N_seed=self.N_seed,
             depth=self.depth,
             n_query=1,
             out_dim=self.dim_flow,
@@ -1069,6 +1177,9 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
         # out is (B, dim_flow) because SetTransformerCross out_dim=dim_flow and n_query=1
         return out
     
+
+
+
 
 @flax_register_to_config
 class SetTransformerPosition_galax_uniformprior(nn.Module, FlaxModelMixin, ConfigMixin):
@@ -1158,6 +1269,10 @@ class SetTransformerPosition_galax_uniformprior(nn.Module, FlaxModelMixin, Confi
 
         # normalize particle cloud (encoder_hidden_states) and keep sample semantics
         # in your original Flow you swapped sample and encoder_hidden_states to match diffusers' API.
+        # encoder_hidden_states shape: (batch_size, 1000, 6)
+
+        
+        # Apply noise with correct broadcasting: each of the 6 dimensions gets its own noise std
         encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
 
         # time embedding

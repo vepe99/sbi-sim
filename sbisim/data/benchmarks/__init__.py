@@ -27,4 +27,5 @@ from .generator_dataloader import (
     OdisseoOTAllParametersPosition_uniformprior_TSIT5_error,
     OdisseoOTAllParametersFiXPosition_uniformprior_TSIT5_error,
     OdisseoOTAllParametersPosition_fixedtime_uniformprior_TSIT5_error,
+    galaxOTAllParametersPosition_uniformprior,
 )

@@ -369,76 +369,77 @@ class ConditionalFlowMatching_batchnorm(Strategy, ABC):
         t_in = jnp.expand_dims(t, axis=1)
 
         params_rng, dropout_rng, drop_path_rng, dropout_rng = jr.split(init_rng, 4)
-        batch_stats = init_model.get("batch_stats", None)
-
-        init_dict = {'params': model_rng, 'drop_path': init_rng, 'dropout': dropout_rng, 'batch_stats': batch_stats}
+       # initialize model; pass empty batch_stats dict so BatchNorm variables are created
+        init_dict = {'params': model_rng, 'drop_path': init_rng, 'dropout': dropout_rng, 'batch_stats': {}}
         init_model = self.model.init(init_dict, t_in, example_data["parameters"],
-                                     example_data["conditioning"],  train=True)
-        # now safe to extract batch_stats
-        batch_stats = init_model.get("batch_stats", None)
-        self.initial_batch_stats = batch_stats
-        # propagate to scaled_model wrapper so sampler sees it
-        # --- ADD THESE LINES ---
-        if hasattr(self, "scaled_model") and self.scaled_model is not None:
-            self.scaled_model.batch_stats = self.batch_stats
-        # -----------------------
+                                    example_data["conditioning"], train=True)
 
-        # store params & batch_stats
-        self.opt.init(init_model['params'])
+        # extract params and batch_stats
+        params = init_model['params']
+        batch_stats = init_model.get('batch_stats', None)
+
+        # initialize optimizer once and store state outside of jit
+        self.opt.init(params)
+
+        # store params & batch_stats on strategy object (non-jitted assignment)
         self.batch_stats = batch_stats
-        
+        self.initial_batch_stats = batch_stats
 
-
-        # store params and batch_stats on the object
-        self.opt.init(init_model["params"])
-        self.batch_stats = init_model.get("batch_stats", None)
-
-        self.opt.init(init_model['params'])
+        # propagate to scaled_model wrapper so sampler sees it
+        if hasattr(self, "scaled_model") and self.scaled_model is not None:
+            self.scaled_model.batch_stats = batch_stats
 
         self.initialized = True
 
         return init_model, rng
 
+
     @partial(jit, static_argnums=(0,))
     def train_step(self, i: int, opt_state: PyTree, rng: jr.PRNGKey, logs: Dict[str, Any],
-                batch: PyTree) -> Tuple[PyTree, jr.PRNGKey, Dict[str, Any]]:
+                batch: PyTree, batch_stats: PyTree = None) -> Tuple[PyTree, jr.PRNGKey, Dict[str, Any], PyTree]:
+        """
+        Returns (opt_state, rng, logs, new_batch_stats)
+        Note: do NOT assign to self.batch_stats inside this function.
+        """
 
         params = self.opt.get_params_from_state(opt_state)
-        batch_stats = getattr(self, "batch_stats", None)
 
-        # value_and_grad expects loss_fn to return (loss, rng, new_batch_stats) as aux
+        # value_and_grad expects loss_fn returns (loss, aux) where aux contains rng and optional new_batch_stats
         (loss, aux), grads = value_and_grad(self.loss_fn, has_aux=True)(
             params, rng, batch, batch_stats
         )
-        rng, new_batch_stats = aux[0], aux[1]
+
+        # aux may be (rng, new_batch_stats) or (rng,)
+        if isinstance(aux, tuple) and len(aux) >= 2:
+            rng_out, new_batch_stats = aux[0], aux[1]
+        else:
+            rng_out, new_batch_stats = aux[0], None
 
         opt_state = self.opt.update(i, opt_state, grads)
 
-        # update stored batch_stats only if new ones were returned
-        if new_batch_stats is not None:
-            self.batch_stats = new_batch_stats
-            # --- ADD THESE LINES ---
-            if hasattr(self, "scaled_model") and self.scaled_model is not None:
-                self.scaled_model.batch_stats = new_batch_stats
-            # -----------------------
-
-
         logs["train/loss"] = jnp.mean(loss)
 
-        return opt_state, rng, logs
+        return opt_state, rng_out, logs, new_batch_stats
 
-    @partial(jit, static_argnums=(0, 5,))
+
+    @partial(jit, static_argnums=(0, 5))
     def eval_step(self, params: PyTree, rng: jr.PRNGKey, logs: Dict[str, Any],
-                batch: PyTree, testing: bool) -> Tuple[jr.PRNGKey, Dict[str, Any]]:
+                batch: PyTree, testing: bool, batch_stats: PyTree = None) -> Tuple[jr.PRNGKey, Dict[str, Any]]:
+        """
+        Evaluation step: uses given batch_stats but does not update them (evaluation only).
+        """
 
-        # forward current batch_stats; loss function will not update them in eval
-        batch_stats = getattr(self, "batch_stats", None)
-        # if your loss_fn supports batch_stats, adapt; otherwise call model.apply with train=False in loss
         loss, aux = self.get_loss_fn(self.loss_type)(params, rng, batch, batch_stats, train=False)
-        rng, new_batch_stats = aux[0], aux[1]
+
+        # aux may be (rng, new_batch_stats) or (rng,)
+        if isinstance(aux, tuple) and len(aux) >= 2:
+            rng_out = aux[0]
+        else:
+            rng_out = aux[0]
 
         logs["val/loss"] = jnp.mean(loss)
-        return rng, logs
+        return rng_out, logs
+
 
 
     @partial(jit, static_argnums=(0,))

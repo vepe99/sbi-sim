@@ -297,7 +297,7 @@ class ConditionalFlowMatching(Strategy, ABC):
 
     @partial(jit, static_argnums=(0,))
     def train_step(self, i: int, opt_state: PyTree, rng: jr.PRNGKey, logs: Dict[str, Any],
-                   batch: PyTree) -> Tuple[PyTree, jr.PRNGKey, Dict[str, Any]]:
+                   batch: PyTree,  batch_stats: PyTree = None) -> Tuple[PyTree, jr.PRNGKey, Dict[str, Any]]:
 
         (loss, rng), grads = value_and_grad(self.loss_fn, has_aux=True)(
             self.opt.get_params_from_state(opt_state), rng, batch)
@@ -306,11 +306,11 @@ class ConditionalFlowMatching(Strategy, ABC):
 
         logs["train/loss"] = jnp.mean(loss)
 
-        return opt_state, rng, logs
+        return opt_state, rng, logs, batch_stats
 
     @partial(jit, static_argnums=(0, 5,))
     def eval_step(self, params: PyTree, rng: jr.PRNGKey, logs: Dict[str, Any],
-                  batch: PyTree, testing: bool) -> Tuple[jr.PRNGKey, Dict[str, Any]]:
+                  batch: PyTree, testing: bool,  batch_stats: PyTree = None) -> Tuple[jr.PRNGKey, Dict[str, Any]]:
 
         loss, rng = self.loss_fn(params, rng, batch)
 

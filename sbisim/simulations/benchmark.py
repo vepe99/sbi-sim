@@ -18,11 +18,18 @@ from jax.scipy.stats import norm
 from odisseo import construct_initial_state
 from odisseo.dynamics import  DIRECT_ACC_MATRIX, DIRECT_ACC_LAXMAP
 from odisseo.option_classes import SimulationConfig, SimulationParams, MNParams, NFWParams, PlummerParams, PSPParams, MN_POTENTIAL, NFW_POTENTIAL, PSP_POTENTIAL, DIFFRAX_BACKEND, TSIT5
+from odisseo.option_classes import RECURSIVECHECKPOINTADJOING, FORWARDMODE
 from odisseo.initial_condition import Plummer_sphere
 from odisseo.time_integration import time_integration
 from odisseo.units import CodeUnits
 from odisseo.utils import projection_on_GD1
 from astropy import units as u
+
+#Galax
+from unxt import Quantity
+import galax.coordinates as gc
+import galax.potential as gp
+import galax.dynamics as gd
 
 class SBISimulator:
 
@@ -1677,7 +1684,7 @@ class OdisseoSimulatorOT_AllParametersPositions_fixtime_orbitfitting_pointcloud_
 
     
 
-    def __init__(self, N_particles: int = 1000):
+    def __init__(self, N_particles: int = 1000, ):
         super().__init__()
         self.N_particles = N_particles
         self.config_sim = SimulationConfig(N_particles = self.N_particles,
@@ -1696,14 +1703,70 @@ class OdisseoSimulatorOT_AllParametersPositions_fixtime_orbitfitting_pointcloud_
                                                   
         self.config_com_stream = self.config_sim._replace(N_particles=1,)
 
-    @partial(jit, static_argnums=(0, 2, 4, 5, 6)) 
+    @partial(jit, static_argnums=(0, 2, 4, 5, 6, 7)) 
     def __call__(self, params,  num_simulations, rng, 
-                 normalize=True, deterministic=False, stream=False ):
+                 normalize=True, deterministic=False, stream=False, forward_diff=False ):
+        if forward_diff:
+            self.config_sim = self.config_sim._replace(diffrax_adjoint_method=FORWARDMODE,)
+            self.config_com = self.config_com._replace(diffrax_adjoint_method=FORWARDMODE,)
+            self.config_com_stream = self.config_com_stream._replace(diffrax_adjoint_method=FORWARDMODE,)
+        else:
+            self.config_sim = self.config_sim._replace(diffrax_adjoint_method=RECURSIVECHECKPOINTADJOING,)
+            self.config_com = self.config_com._replace(diffrax_adjoint_method=RECURSIVECHECKPOINTADJOING,)
+            self.config_com_stream = self.config_com_stream._replace(diffrax_adjoint_method=RECURSIVECHECKPOINTADJOING,)    
             
         batch_size = params.shape[0]
 
         X = params
         Y = self.run_simulation(params, rng, stream)
+        if deterministic:
+            pass
+        else:
+            Y =  self.add_noise(x=Y, rng=rng)
+
+        samples_x = X
+        samples_y = Y
+    
+        return samples_y, rng
+
+
+class GalaxSimulatorOT_AllParametersPositions(SBISimulator):
+
+    def run_simulation(self, params, rng):
+        w = gc.PhaseSpacePosition(q=Quantity([params[6], params[7], params[8]], "kpc"),
+                            p=Quantity([params[9], params[10], params[11]], "km/s"),
+                        )
+        milky_way_pot = gp.BovyMWPotential2014()
+        t_array = Quantity(-jnp.linspace(0, 3000, self.N_particles), "Myr")
+        prog_mass = Quantity(params[0], "Msun")
+        pot= gp.CompositePotential(
+                halo = gp.NFWPotential(m=params[1], 
+                                    r_s=params[2], units="galactic"),
+                disk = gp.MiyamotoNagaiPotential(m_tot=params[3],
+                                                a=params[4],
+                                                b=params[5], units="galactic"),
+                bulge=milky_way_pot.bulge,
+            )
+        df = gd.ChenStreamDF()
+        gen = gd.MockStreamGenerator(df, pot)
+        key = jr.key(0)
+        stream_c25_new, _ = gen.run(key, t_array, w, prog_mass)
+        return stream_c25_new
+
+    
+
+    def __init__(self, N_particles: int = 1000, ):
+        super().__init__()
+        self.N_particles = N_particles
+
+    @partial(jit, static_argnums=(0, 2, 4, 5)) 
+    def __call__(self, params,  num_simulations, rng, 
+                 normalize=True, deterministic=False, ):
+
+        batch_size = params.shape[0]
+
+        X = params
+        Y = self.run_simulation(params, rng)
         if deterministic:
             pass
         else:

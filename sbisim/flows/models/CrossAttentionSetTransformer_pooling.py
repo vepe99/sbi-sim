@@ -93,7 +93,68 @@ class FiLM(nn.Module):
             beta = beta.reshape((beta.shape[0],) + tuple(expand_dims) + (beta.shape[-1],))
 
         return gamma * x + beta
+    
+class MAB(nn.Module):
+    N_dim: int
+    N_head: int
+    use_film: bool = True
 
+    @nn.compact
+    def __call__(self, x, y, t_emb: Optional[jnp.ndarray] = None, theta_emb: Optional[jnp.ndarray] = None):
+        """
+        x: (B, N_x, D_in)    -> queries origin
+        y: (B, N_y, D_in)    -> keys/values origin (may include extra tokens)
+        t_emb: (B, D_t) or None
+        theta_emb: (B, D_theta) or None  # will be concatenated as a token into y prior to projections
+        """
+        B = x.shape[0]
+        N_x = x.shape[1]
+        N_y = y.shape[1]
+
+        # If theta_emb is provided, concatenate it as one extra token to y
+        if theta_emb is not None:
+            # project theta to N_dim first (so concatenation is compatible)
+            theta_proj = nn.Dense(self.N_dim, kernel_init=nn.initializers.xavier_uniform())(theta_emb)  # (B, N_dim)
+            theta_proj = theta_proj.squeeze(axis=1)
+            theta_proj = theta_proj[:, None, :]  # (B, 1, N_dim)
+            y = jnp.concatenate([theta_proj, y], axis=1)
+            N_y = y.shape[1]
+
+        dim_split = self.N_dim // self.N_head
+        kernel_init = nn.initializers.variance_scaling(scale=1/3, mode="fan_in", distribution="uniform")
+
+        # Project q/k/v with DenseGeneral -> (B, N, N_head, dim_split)
+        q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(x)
+        k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(y)
+        v = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(y)
+
+        # If time embedding is provided: project & broadcast and add to q and k (so time influences attention)
+        if t_emb is not None:
+            # project time to same head-split shape
+            # create per-token t for x and per-key t for y
+            t_proj_for_q = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N_x, axis=1))
+            t_proj_for_k = DenseGeneral(features=(self.N_head, dim_split), kernel_init=kernel_init)(jnp.repeat(t_emb[:, None, :], N_y, axis=1))
+            q = q + t_proj_for_q
+            k = k + t_proj_for_k
+
+        # dot-product attention: returns (B, N_x, N_head, dim_split)
+        a = dot_product_attention(q, k, v)  # uses scaled dot-prod across heads
+
+        # residual + reshape to (B, N_x, N_dim)
+        o = a.reshape(B, N_x, self.N_dim)
+
+        # residual
+        out = o + x
+
+        # FiLM modulation (apply before FFN)
+        if self.use_film and t_emb is not None:
+            out = FiLM(out_dim=self.N_dim)(out, t_emb)
+
+        # FF
+        out_ff = MLPBlock(dim=self.N_dim)(out)
+        out = out + out_ff
+
+        return out
 
 class SAB(nn.Module):
     """Self-attention block for sets. Optionally uses time embedding and FiLM.
@@ -133,8 +194,6 @@ class SAB(nn.Module):
 
         # residual
         out = out + x
-        if self.ln:
-            out = LayerNorm()(out)
 
         # FiLM modulation (apply before FFN)
         if self.use_film and t_emb is not None:
@@ -143,10 +202,39 @@ class SAB(nn.Module):
         # FF
         out_ff = MLPBlock(dim=self.N_dim)(out)
         out = out + out_ff
-        if self.ln:
-            out = LayerNorm()(out)
 
         return out
+    
+class PMA(nn.Module):
+    """ Implementation of the 'Pooling by Multihead Attention'.
+
+    Parameters
+    ----------
+    N_dim : int
+        element-wise size of the output 
+
+    N_head : int
+        number of attention heads, must be a divisor of N_dim
+        
+    N_seed: int
+        number of 'seed vectors'
+
+    ln : bool
+        if set to False, there is no layer normalization applied
+        default: False
+    """
+    N_dim: int
+    N_head: int
+    N_seed: int
+        
+    @nn.compact
+    def __call__(self, x, t_emb: Optional[jnp.ndarray] = None):
+        N_batch = x.shape[0]
+        s = self.param("seeds", nn.initializers.xavier_uniform(), (1,self.N_seed,self.N_dim))
+        s = jnp.repeat(s, N_batch,axis=0).reshape((N_batch,self.N_seed,self.N_dim))
+        
+        return MAB(N_dim = self.N_dim,
+                   N_head = self.N_head)(s, x)
 
 
 class CrossAttentionBlock(nn.Module):
@@ -231,6 +319,7 @@ class SetTransformerCross(nn.Module):
 
     N_dim: int
     N_head: int
+    N_seed: int = 1
     depth: int = 2
     n_query: int = 1
     out_dim: Optional[int] = None
@@ -249,6 +338,9 @@ class SetTransformerCross(nn.Module):
         # 2) feed through stacked SABs
         for _ in range(self.depth):
             x = SAB(N_dim=self.N_dim, N_head=self.N_head, ln=self.ln, use_film=self.use_film)(x, t_emb=t_emb)
+        
+        #Pooling
+        x = PMA(N_dim=self.N_dim, N_head=self.N_head, N_seed=self.N_seed, )(x, t_emb=t_emb)
 
         # 3) Prepare queries (theta). If theta_emb is provided, project it; otherwise learn seeds.
         if theta_emb is not None:
@@ -624,6 +716,7 @@ class SetTransformerPosition_uniformprior_TSIT5(nn.Module, FlaxModelMixin, Confi
     dim_flow: int = 7
     N_dim: int = 64
     N_head: int = 8
+    N_seed: int = 1
     depth: int = 3
     ln: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -667,6 +760,7 @@ class SetTransformerPosition_uniformprior_TSIT5(nn.Module, FlaxModelMixin, Confi
         self.SetTransformerEncoder = SetTransformerCross(
             N_dim=self.N_dim,
             N_head=self.N_head,
+            N_seed=self.N_seed, 
             depth=self.depth,
             n_query=1,
             out_dim=self.dim_flow,
@@ -970,6 +1064,7 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
     dim_flow: int = 7
     N_dim: int = 64
     N_head: int = 8
+    N_seed = 1
     depth: int = 3
     ln: bool = True
     dtype: jnp.dtype = jnp.float32
@@ -1013,6 +1108,7 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
         self.SetTransformerEncoder = SetTransformerCross(
             N_dim=self.N_dim,
             N_head=self.N_head,
+            N_seed=self.N_seed,
             depth=self.depth,
             n_query=1,
             out_dim=self.dim_flow,
@@ -1070,111 +1166,3 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
         return out
     
 
-@flax_register_to_config
-class SetTransformerPosition_galax_uniformprior(nn.Module, FlaxModelMixin, ConfigMixin):
-    """Flow module that uses SetTransformerCross as its encoder.
-
-    Key args (exposed as dataclass config via flax_register_to_config):
-      - sample_size: int (expected N particles when creating dummy inputs)
-      - dim_flow: int (final output dim)
-      - N_dim, N_head, depth: SetTransformer hyperparams
-      - mean_pointcloud / std_pointcloud: arrays for normalization
-    """
-    sample_size: int = 1000
-    dim_flow: int = 7
-    N_dim: int = 64
-    N_head: int = 8
-    depth: int = 3
-    ln: bool = True
-    dtype: jnp.dtype = jnp.float32
-    flip_sin_to_cos: bool = True
-    freq_shift: int = 0
-    use_film: bool = True
-
-    # these paths/arrays can be set externally; provided here for compatibility
-    mean_pointcloud = jnp.load('/export/data/vgiusepp/galax_data/data_varying_position_uniform_prior/preprocess/mean_std_1e6_pointcloud.npz')['mean_x']
-    std_pointcloud = jnp.load('/export/data/vgiusepp/galax_data/data_varying_position_uniform_prior/preprocess/mean_std_1e6_pointcloud.npz')['std_x']
-
-    def init_weights(self, rng: jax.Array) -> FrozenDict:
-        # initialize params by calling init with dummy inputs
-        sample_shape = (1, self.sample_size, 6)
-        sample = jnp.zeros(sample_shape, dtype=jnp.float32)
-        timesteps = jnp.ones((1,), dtype=jnp.int32)
-        encoder_hidden_states = jnp.zeros((1, self.dim_flow), dtype=jnp.float32)
-
-        params_rng, dropout_rng = jax.random.split(rng)
-        rngs = {"params": params_rng, "dropout": dropout_rng}
-
-        return self.init(rngs, timesteps=timesteps, sample=encoder_hidden_states, encoder_hidden_states=sample)["params"]
-
-    def setup(self) -> None:
-        time_embed_dim = self.N_dim * 4
-
-        # time
-        self.time_proj = FlaxTimesteps(
-            self.N_dim, flip_sin_to_cos=self.flip_sin_to_cos, freq_shift=self.freq_shift
-        )
-        self.time_embedding = FlaxTimestepEmbedding(time_embed_dim, dtype=self.dtype)
-
-        # simple param projection (instead of FlaxTimestepEmbedding)
-        self.param_proj = nn.Sequential([
-            Dense(self.N_dim),
-            nn.silu,
-            Dense(self.N_dim),
-        ])
-
-        # encoder
-        self.SetTransformerEncoder = SetTransformerCross(
-            N_dim=self.N_dim,
-            N_head=self.N_head,
-            depth=self.depth,
-            n_query=1,
-            out_dim=self.dim_flow,
-            ln=self.ln,
-            use_film=self.use_film,
-        )
-
-        self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
-
-    def normalization(self, x):
-        # expects x shape (N, 6) or broadcastable
-        normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud)
-        return normalized_x
-
-    def __call__(
-        self,
-        timesteps: jnp.ndarray,
-        sample: jnp.ndarray,
-        encoder_hidden_states: jnp.ndarray,
-        return_dict: bool = False,
-        train: bool = False,
-    ) -> jnp.ndarray:
-        # timesteps: (B,) or scalar
-        if not isinstance(timesteps, jnp.ndarray):
-            timesteps = jnp.array([timesteps], dtype=jnp.int32)
-        elif isinstance(timesteps, jnp.ndarray) and len(timesteps.shape) == 0:
-            timesteps = timesteps.astype(dtype=jnp.float32)
-            timesteps = jnp.expand_dims(timesteps, 0)
-
-        # normalize particle cloud (encoder_hidden_states) and keep sample semantics
-        # in your original Flow you swapped sample and encoder_hidden_states to match diffusers' API.
-        encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
-
-        # time embedding
-        timesteps = jnp.reshape(timesteps, -1)
-        t_emb = self.time_proj(timesteps)
-        t_emb = self.time_embedding(t_emb)
-
-        # swap: sample is expected to be the conditioning in diffusers' style here
-        temp_ = sample
-        sample = encoder_hidden_states   # now sample: (B, N, 6)
-        encoder_hidden_states = temp_    # now encoder_hidden_states: (B, dim_flow)
-
-        # project encoder_hidden_states (theta) to N_dim
-        theta_emb = self.param_proj(encoder_hidden_states)  # (B, N_dim)
-
-        # call SetTransformerCross: sample=(B,N,6), t_emb=(B, D_t), theta_emb=(B, N_dim)
-        out = self.SetTransformerEncoder(sample, t_emb=t_emb, theta_emb=theta_emb)
-
-        # out is (B, dim_flow) because SetTransformerCross out_dim=dim_flow and n_query=1
-        return out

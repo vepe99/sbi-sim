@@ -220,9 +220,24 @@ class TrainerModule:
 
         step_ = 0
         for batch in p:
+            # get current opt state
+            opt_state = self.opt.get_state()
 
-            opt_state, rng, logs = self.strategy.train_step(self.global_step, opt_state,
-                                                   rng, logs, batch)
+            # pass current batch_stats into the jitted train_step
+            current_batch_stats = getattr(self.strategy, "batch_stats", None)
+            opt_state, rng, logs, new_batch_stats = self.strategy.train_step(
+                self.global_step, opt_state, rng, logs, batch, current_batch_stats
+            )
+
+            # update batch_stats in Python (outside jit) if returned
+            if new_batch_stats is not None:
+                self.strategy.batch_stats = new_batch_stats
+                if hasattr(self.strategy, "scaled_model") and self.strategy.scaled_model is not None:
+                    self.strategy.scaled_model.batch_stats = new_batch_stats
+
+            # write back opt_state to be set at epoch end (or immediately)
+            self.opt.set_state(opt_state)
+
             avg_loss += logs['train/loss']
             global_step += 1
             p.set_description(f'{self.epoch}/{self.num_epochs} loss: {avg_loss/(step_+1):.3f}')
@@ -230,7 +245,7 @@ class TrainerModule:
             step_ += 1
             if step_ >= num_batches:
                 break
-
+            
         avg_loss /= step_
         logs['loss'] = avg_loss
         self.metrics['loss'] = avg_loss
@@ -245,8 +260,11 @@ class TrainerModule:
             step_ = 0
             for batch in p:
 
+                current_batch_stats = getattr(self.strategy, "batch_stats", None)
                 rng, logs = self.strategy.eval_step(self.opt.get_params_from_state(opt_state),
-                                                    rng, logs, batch, testing=False)
+                                                    rng, logs, batch, testing=False, batch_stats=current_batch_stats)
+
+
                 avg_loss += logs['val/loss']
                 p.set_description(f'{self.epoch}/{self.num_epochs} val loss: {avg_loss/(step_+1):.3f}')
 

@@ -1,31 +1,33 @@
 #REMEMBER TO USE CODA_VISIBILE_DEVICES=3
-name: Odisseo_0_gradient_signal
-dim_flow: 13
-dim_conditioning: 32
+name: Galax_0_gradient_signal
+dim_flow: 12
+dim_conditioning: 5
 context_dim: 64
 controlled_flow_in_dim: 46
-aggregation_in_dim: 40
+aggregation_in_dim: 32
 aggregation_out_dim: 32
-start_time: 0.90
-batch_size: 1000
+start_time: 0.80
+batch_size: 25
 weighting: one
 loss_type: fm_ot
 scaling_type: none
-learning_rate: 0.00005
+learning_rate: 0.001
 hidden_dims:
-  - 128
-  - 128
   - 64
   - 64
+  - 64
+  - 32
   - 32
   - 32
 
 data:
-  target: sbisim.data.benchmarks.OdisseoOTAllParametersPosition_fixedtime_uniformprior_TSIT5_error
+  target: sbisim.data.benchmarks.galaxOTAllParametersPosition_uniformprior
   params:
-    add_noise: False
     use_log: False
-  _file: configs/datasets/benchmarks/10e5_dataset.yaml
+    noise: False
+  _file: configs/datasets/benchmarks/10e6_dataset.yaml
+  normalization: True
+
 strategy:
   target: sbisim.strategy.SimulatorFeedback_batchnorm
   params:
@@ -54,21 +56,21 @@ strategy:
           params:
             sigma_min: 0.0001
     model_pretrained:
-      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5
+      target: sbisim.flows.models.CrossAttentionSetTransformer.SetTransformerPosition_galax_uniformprior
       params:
         dim_flow: ${dim_flow}
-        sample_size: 1000
+        sample_size: 200
         N_dim: 128
         N_head: 1
-        depth: 2
+        depth: 3
     weight_file_pretrained: ${weight_file_pretrained}
     model:
-      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorOdisseoPositions_fixtime_orbit_fitting
+      target: sbisim.flows.correction.corrector.CorrectorDifferentiableSimulatorGalaxPositions_batch_norm
       params:
         simulator:
-          target: sbisim.simulations.OdisseoSimulatorOT_AllParametersPositions_fixtime_orbitfitting_pointcloud_TSIT5
+          target: sbisim.simulations.GalaxSimulatorOT_AllParametersPositions
           params:
-            N_particles: 100
+            N_particles: 10_000
         start_time: ${start_time}
         controlled_flow:
           target: sbisim.flows.models.fmpe.DenseResidualNet
@@ -89,8 +91,8 @@ strategy:
         freeze: true
 
 training:
-  num_epochs: 20
-  num_steps_per_epoch: 2000
+  num_epochs: 3
+  num_steps_per_epoch: 300
   batch_size: ${batch_size}
   early_stopping:
     patience: 6
@@ -99,18 +101,18 @@ test:
   active: True
   tests:
     true_sampling:
-      target: sbisim.callbacks.c2st.C2ST_OT_AllParametersPositions_fixedtime_uniformprior_TrueSimulation
+      target: sbisim.callbacks.C2ST_OT_AllParametersPositions_galax_uniformprior_TrueSimulation
       params:
         savedir: ${runtime.logdir}
-        num_total_samples: 5000
+        num_total_samples: 2000
         batch_size: ${batch_size}
+
     ranks:
-      target: sbisim.callbacks.C2ST_OT_AllParametersPositions_fixedtime_uniformprior
+      target: sbisim.callbacks.c2st.C2ST_OT_AllParametersPositions_galax_uniformprior
       params:
-        save_every: 200
         savedir: ${runtime.logdir}
-        num_total_samples: 1000
-        observation_idx: 500
+        num_total_samples: 500
+        observation_idx: 1000
         batch_size: ${batch_size}
 
 patience: 5
