@@ -3,9 +3,9 @@ In order to reproduce the paper figure the Odisseo package (https://github.com/v
 
 Figure file:
 
-- Run `figure_2_3.ipynb` for Fig. 2-3.
-- Run `figure_4.ipynb` Fig. 4.
-- Fig. 7-8-9 requires to either download the dataset from Zenodo (`https://zenodo.org/uploads/17711491`) or to generate the training set by following steps from 1-3. Afterwards run 4-5:
+- Run `figure_1_2.ipynb` for Fig. 1-2.
+- Run `figure_3.ipynb` Fig. 3.
+- Fig. 6-7-8-9 requires to either download the dataset from Zenodo (`https://zenodo.org/uploads/17711491`) or to generate the training set by following steps from 1-3. Afterwards run 4-5:
   1. to generate the training set using `generate_trainingset.py`
   2. to generate the dataset using `create_dataset_AllParameters_varyingposition_uniform_TSIT5_sbisim.py`
   3. to get the normalization for parameters \theta and the observation x
