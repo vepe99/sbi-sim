@@ -7,7 +7,7 @@ from flax.training import orbax_utils
 from .callback import Callback
 
 import jax.random as jr
-
+import json 
 
 class Checkpoint(Callback):
 
@@ -43,6 +43,8 @@ class Checkpoint(Callback):
         savedir_best_val = Path(savedir).joinpath('best_val')
         savedir_latest = Path(savedir).joinpath('latest')
 
+        self.savedir_latest = savedir_latest
+
         self.checkpoint_manager_best_train = orbax.checkpoint.CheckpointManager(
             savedir_best_train, self.orbax_checkpointer_best_train, self.options_best_train)
         self.checkpoint_manager_best_val = orbax.checkpoint.CheckpointManager(
@@ -71,7 +73,23 @@ class Checkpoint(Callback):
                                                 metrics=ckpt["metrics"])
 
         self.checkpoint_manager_latest.save(epoch, ckpt,
-                                          save_kwargs={'save_args': save_args})
+                                          save_kwargs={'save_args': save_args},
+                                          metrics=ckpt["val_loss_history"])
+
+        self._save_loss_history(ckpt)
+
+    def _save_loss_history(self, ckpt):
+        """Save train and val loss history to a JSON file in the latest directory."""
+        history_data = {
+            'train_loss_history': ckpt.get('train_loss_history', []),
+            'val_loss_history': ckpt.get('val_loss_history', []),
+            'epoch': ckpt.get('epoch', 0),
+            'global_step': ckpt.get('global_step', 0)
+        }
+        
+        history_file = self.savedir_latest / 'loss_history.json'
+        with open(history_file, 'w') as f:
+            json.dump(history_data, f, indent=2)
 
     def on_epoch_end(self, logs: dict, rng: jr.PRNGKey, *args, **kwargs):
         return self.__call__(logs, rng, *args, **kwargs)

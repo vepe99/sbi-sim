@@ -62,6 +62,9 @@ class TrainerModule:
         self.train_step = None
         self.metrics = {}
 
+        self.train_loss_history = []
+        self.val_loss_history = []
+
         self.init_strategy()
 
         self.restore_from_checkpoint(checkpoint)
@@ -123,7 +126,9 @@ class TrainerModule:
             'metrics': {key: float(value) for key, value in self.metrics.items()},
             'epoch': self.epoch,
             'rng': self.rng,
-            'config': self.config
+            'config': self.config,
+            'train_loss_history': self.train_loss_history,  
+            'val_loss_history': self.val_loss_history 
         }
 
         # Save batch_stats only if present in the strategy
@@ -157,6 +162,13 @@ class TrainerModule:
                     # propagate into scaled_model wrapper if present
                     if hasattr(self.strategy, "scaled_model") and self.strategy.scaled_model is not None:
                         self.strategy.scaled_model.batch_stats = ckpt["batch_stats"]
+                
+                # ADD THESE LINES to restore history
+                if "train_loss_history" in ckpt:
+                    self.train_loss_history = ckpt["train_loss_history"]
+                if "val_loss_history" in ckpt:
+                    self.val_loss_history = ckpt["val_loss_history"]
+
 
                 print(f"Restored from checkpoint {checkpoint} at global step {self.global_step}")
 
@@ -249,6 +261,7 @@ class TrainerModule:
         avg_loss /= step_
         logs['loss'] = avg_loss
         self.metrics['loss'] = avg_loss
+        self.train_loss_history.append(float(avg_loss))
 
         if self.validation:
 
@@ -276,6 +289,7 @@ class TrainerModule:
 
             logs['val_loss'] = avg_loss
             self.metrics['val_loss'] = avg_loss
+            self.val_loss_history.append(float(avg_loss))  
 
         self.global_step = global_step
         self.opt.set_state(opt_state)
