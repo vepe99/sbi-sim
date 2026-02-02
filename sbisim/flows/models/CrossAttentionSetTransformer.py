@@ -1070,111 +1070,111 @@ class SetTransformerPositionPositions_fixedtime_uniformprior_TSIT5(nn.Module, Fl
         return out
     
 
-@flax_register_to_config
-class SetTransformerPosition_galax_uniformprior(nn.Module, FlaxModelMixin, ConfigMixin):
-    """Flow module that uses SetTransformerCross as its encoder.
+# @flax_register_to_config
+# class SetTransformerPosition_galax_uniformprior(nn.Module, FlaxModelMixin, ConfigMixin):
+#     """Flow module that uses SetTransformerCross as its encoder.
 
-    Key args (exposed as dataclass config via flax_register_to_config):
-      - sample_size: int (expected N particles when creating dummy inputs)
-      - dim_flow: int (final output dim)
-      - N_dim, N_head, depth: SetTransformer hyperparams
-      - mean_pointcloud / std_pointcloud: arrays for normalization
-    """
-    sample_size: int = 1000
-    dim_flow: int = 7
-    N_dim: int = 64
-    N_head: int = 8
-    depth: int = 3
-    ln: bool = True
-    dtype: jnp.dtype = jnp.float32
-    flip_sin_to_cos: bool = True
-    freq_shift: int = 0
-    use_film: bool = True
+#     Key args (exposed as dataclass config via flax_register_to_config):
+#       - sample_size: int (expected N particles when creating dummy inputs)
+#       - dim_flow: int (final output dim)
+#       - N_dim, N_head, depth: SetTransformer hyperparams
+#       - mean_pointcloud / std_pointcloud: arrays for normalization
+#     """
+#     sample_size: int = 1000
+#     dim_flow: int = 7
+#     N_dim: int = 64
+#     N_head: int = 8
+#     depth: int = 3
+#     ln: bool = True
+#     dtype: jnp.dtype = jnp.float32
+#     flip_sin_to_cos: bool = True
+#     freq_shift: int = 0
+#     use_film: bool = True
 
-    # these paths/arrays can be set externally; provided here for compatibility
-    mean_pointcloud = jnp.load('/export/data/vgiusepp/galax_data/data_varying_position_uniform_prior/preprocess/mean_std_1e6_pointcloud.npz')['mean_x']
-    std_pointcloud = jnp.load('/export/data/vgiusepp/galax_data/data_varying_position_uniform_prior/preprocess/mean_std_1e6_pointcloud.npz')['std_x']
+#     # these paths/arrays can be set externally; provided here for compatibility
+#     mean_pointcloud = jnp.load('/export/data/vgiusepp/galax_data/data_varying_position_uniform_prior/preprocess/mean_std_1e6_pointcloud.npz')['mean_x']
+#     std_pointcloud = jnp.load('/export/data/vgiusepp/galax_data/data_varying_position_uniform_prior/preprocess/mean_std_1e6_pointcloud.npz')['std_x']
 
-    def init_weights(self, rng: jax.Array) -> FrozenDict:
-        # initialize params by calling init with dummy inputs
-        sample_shape = (1, self.sample_size, 6)
-        sample = jnp.zeros(sample_shape, dtype=jnp.float32)
-        timesteps = jnp.ones((1,), dtype=jnp.int32)
-        encoder_hidden_states = jnp.zeros((1, self.dim_flow), dtype=jnp.float32)
+#     def init_weights(self, rng: jax.Array) -> FrozenDict:
+#         # initialize params by calling init with dummy inputs
+#         sample_shape = (1, self.sample_size, 6)
+#         sample = jnp.zeros(sample_shape, dtype=jnp.float32)
+#         timesteps = jnp.ones((1,), dtype=jnp.int32)
+#         encoder_hidden_states = jnp.zeros((1, self.dim_flow), dtype=jnp.float32)
 
-        params_rng, dropout_rng = jax.random.split(rng)
-        rngs = {"params": params_rng, "dropout": dropout_rng}
+#         params_rng, dropout_rng = jax.random.split(rng)
+#         rngs = {"params": params_rng, "dropout": dropout_rng}
 
-        return self.init(rngs, timesteps=timesteps, sample=encoder_hidden_states, encoder_hidden_states=sample)["params"]
+#         return self.init(rngs, timesteps=timesteps, sample=encoder_hidden_states, encoder_hidden_states=sample)["params"]
 
-    def setup(self) -> None:
-        time_embed_dim = self.N_dim * 4
+#     def setup(self) -> None:
+#         time_embed_dim = self.N_dim * 4
 
-        # time
-        self.time_proj = FlaxTimesteps(
-            self.N_dim, flip_sin_to_cos=self.flip_sin_to_cos, freq_shift=self.freq_shift
-        )
-        self.time_embedding = FlaxTimestepEmbedding(time_embed_dim, dtype=self.dtype)
+#         # time
+#         self.time_proj = FlaxTimesteps(
+#             self.N_dim, flip_sin_to_cos=self.flip_sin_to_cos, freq_shift=self.freq_shift
+#         )
+#         self.time_embedding = FlaxTimestepEmbedding(time_embed_dim, dtype=self.dtype)
 
-        # simple param projection (instead of FlaxTimestepEmbedding)
-        self.param_proj = nn.Sequential([
-            Dense(self.N_dim),
-            nn.silu,
-            Dense(self.N_dim),
-        ])
+#         # simple param projection (instead of FlaxTimestepEmbedding)
+#         self.param_proj = nn.Sequential([
+#             Dense(self.N_dim),
+#             nn.silu,
+#             Dense(self.N_dim),
+#         ])
 
-        # encoder
-        self.SetTransformerEncoder = SetTransformerCross(
-            N_dim=self.N_dim,
-            N_head=self.N_head,
-            depth=self.depth,
-            n_query=1,
-            out_dim=self.dim_flow,
-            ln=self.ln,
-            use_film=self.use_film,
-        )
+#         # encoder
+#         self.SetTransformerEncoder = SetTransformerCross(
+#             N_dim=self.N_dim,
+#             N_head=self.N_head,
+#             depth=self.depth,
+#             n_query=1,
+#             out_dim=self.dim_flow,
+#             ln=self.ln,
+#             use_film=self.use_film,
+#         )
 
-        self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
+#         self.dense_out = Dense(self.dim_flow, dtype=self.dtype)
 
-    def normalization(self, x):
-        # expects x shape (N, 6) or broadcastable
-        normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud)
-        return normalized_x
+#     def normalization(self, x):
+#         # expects x shape (N, 6) or broadcastable
+#         normalized_x = (x - self.mean_pointcloud) / (self.std_pointcloud)
+#         return normalized_x
 
-    def __call__(
-        self,
-        timesteps: jnp.ndarray,
-        sample: jnp.ndarray,
-        encoder_hidden_states: jnp.ndarray,
-        return_dict: bool = False,
-        train: bool = False,
-    ) -> jnp.ndarray:
-        # timesteps: (B,) or scalar
-        if not isinstance(timesteps, jnp.ndarray):
-            timesteps = jnp.array([timesteps], dtype=jnp.int32)
-        elif isinstance(timesteps, jnp.ndarray) and len(timesteps.shape) == 0:
-            timesteps = timesteps.astype(dtype=jnp.float32)
-            timesteps = jnp.expand_dims(timesteps, 0)
+#     def __call__(
+#         self,
+#         timesteps: jnp.ndarray,
+#         sample: jnp.ndarray,
+#         encoder_hidden_states: jnp.ndarray,
+#         return_dict: bool = False,
+#         train: bool = False,
+#     ) -> jnp.ndarray:
+#         # timesteps: (B,) or scalar
+#         if not isinstance(timesteps, jnp.ndarray):
+#             timesteps = jnp.array([timesteps], dtype=jnp.int32)
+#         elif isinstance(timesteps, jnp.ndarray) and len(timesteps.shape) == 0:
+#             timesteps = timesteps.astype(dtype=jnp.float32)
+#             timesteps = jnp.expand_dims(timesteps, 0)
 
-        # normalize particle cloud (encoder_hidden_states) and keep sample semantics
-        # in your original Flow you swapped sample and encoder_hidden_states to match diffusers' API.
-        encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
+#         # normalize particle cloud (encoder_hidden_states) and keep sample semantics
+#         # in your original Flow you swapped sample and encoder_hidden_states to match diffusers' API.
+#         encoder_hidden_states = jax.vmap(self.normalization, in_axes=0)(encoder_hidden_states)
 
-        # time embedding
-        timesteps = jnp.reshape(timesteps, -1)
-        t_emb = self.time_proj(timesteps)
-        t_emb = self.time_embedding(t_emb)
+#         # time embedding
+#         timesteps = jnp.reshape(timesteps, -1)
+#         t_emb = self.time_proj(timesteps)
+#         t_emb = self.time_embedding(t_emb)
 
-        # swap: sample is expected to be the conditioning in diffusers' style here
-        temp_ = sample
-        sample = encoder_hidden_states   # now sample: (B, N, 6)
-        encoder_hidden_states = temp_    # now encoder_hidden_states: (B, dim_flow)
+#         # swap: sample is expected to be the conditioning in diffusers' style here
+#         temp_ = sample
+#         sample = encoder_hidden_states   # now sample: (B, N, 6)
+#         encoder_hidden_states = temp_    # now encoder_hidden_states: (B, dim_flow)
 
-        # project encoder_hidden_states (theta) to N_dim
-        theta_emb = self.param_proj(encoder_hidden_states)  # (B, N_dim)
+#         # project encoder_hidden_states (theta) to N_dim
+#         theta_emb = self.param_proj(encoder_hidden_states)  # (B, N_dim)
 
-        # call SetTransformerCross: sample=(B,N,6), t_emb=(B, D_t), theta_emb=(B, N_dim)
-        out = self.SetTransformerEncoder(sample, t_emb=t_emb, theta_emb=theta_emb)
+#         # call SetTransformerCross: sample=(B,N,6), t_emb=(B, D_t), theta_emb=(B, N_dim)
+#         out = self.SetTransformerEncoder(sample, t_emb=t_emb, theta_emb=theta_emb)
 
-        # out is (B, dim_flow) because SetTransformerCross out_dim=dim_flow and n_query=1
-        return out
+#         # out is (B, dim_flow) because SetTransformerCross out_dim=dim_flow and n_query=1
+#         return out

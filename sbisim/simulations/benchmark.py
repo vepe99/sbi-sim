@@ -27,9 +27,9 @@ from astropy import units as u
 
 #Galax
 from unxt import Quantity
-import galax.coordinates as gc
-import galax.potential as gp
-import galax.dynamics as gd
+# import galax.coordinates as gc
+# import galax.potential as gp
+# import galax.dynamics as gd
 
 class SBISimulator:
 
@@ -1730,52 +1730,52 @@ class OdisseoSimulatorOT_AllParametersPositions_fixtime_orbitfitting_pointcloud_
         return samples_y, rng
 
 
-class GalaxSimulatorOT_AllParametersPositions(SBISimulator):
+# class GalaxSimulatorOT_AllParametersPositions(SBISimulator):
 
-    def run_simulation(self, params, rng):
-        w = gc.PhaseSpacePosition(q=Quantity([params[6], params[7], params[8]], "kpc"),
-                            p=Quantity([params[9], params[10], params[11]], "km/s"),
-                        )
-        milky_way_pot = gp.BovyMWPotential2014()
-        t_array = Quantity(-jnp.linspace(0, 3000, self.N_particles), "Myr")
-        prog_mass = Quantity(params[0], "Msun")
-        pot= gp.CompositePotential(
-                halo = gp.NFWPotential(m=params[1], 
-                                    r_s=params[2], units="galactic"),
-                disk = gp.MiyamotoNagaiPotential(m_tot=params[3],
-                                                a=params[4],
-                                                b=params[5], units="galactic"),
-                bulge=milky_way_pot.bulge,
-            )
-        df = gd.ChenStreamDF()
-        gen = gd.MockStreamGenerator(df, pot)
-        key = jr.key(0)
-        stream_c25_new, _ = gen.run(key, t_array, w, prog_mass)
-        return stream_c25_new
+#     def run_simulation(self, params, rng):
+#         w = gc.PhaseSpacePosition(q=Quantity([params[6], params[7], params[8]], "kpc"),
+#                             p=Quantity([params[9], params[10], params[11]], "km/s"),
+#                         )
+#         milky_way_pot = gp.BovyMWPotential2014()
+#         t_array = Quantity(-jnp.linspace(0, 3000, self.N_particles), "Myr")
+#         prog_mass = Quantity(params[0], "Msun")
+#         pot= gp.CompositePotential(
+#                 halo = gp.NFWPotential(m=params[1], 
+#                                     r_s=params[2], units="galactic"),
+#                 disk = gp.MiyamotoNagaiPotential(m_tot=params[3],
+#                                                 a=params[4],
+#                                                 b=params[5], units="galactic"),
+#                 bulge=milky_way_pot.bulge,
+#             )
+#         df = gd.ChenStreamDF()
+#         gen = gd.MockStreamGenerator(df, pot)
+#         key = jr.key(0)
+#         stream_c25_new, _ = gen.run(key, t_array, w, prog_mass)
+#         return stream_c25_new
 
     
 
-    def __init__(self, N_particles: int = 1000, ):
-        super().__init__()
-        self.N_particles = N_particles
+#     def __init__(self, N_particles: int = 1000, ):
+#         super().__init__()
+#         self.N_particles = N_particles
 
-    @partial(jit, static_argnums=(0, 2, 4, 5)) 
-    def __call__(self, params,  num_simulations, rng, 
-                 normalize=True, deterministic=False, ):
+#     @partial(jit, static_argnums=(0, 2, 4, 5)) 
+#     def __call__(self, params,  num_simulations, rng, 
+#                  normalize=True, deterministic=False, ):
 
-        batch_size = params.shape[0]
+#         batch_size = params.shape[0]
 
-        X = params
-        Y = self.run_simulation(params, rng)
-        if deterministic:
-            pass
-        else:
-            Y =  self.add_noise(x=Y, rng=rng)
+#         X = params
+#         Y = self.run_simulation(params, rng)
+#         if deterministic:
+#             pass
+#         else:
+#             Y =  self.add_noise(x=Y, rng=rng)
 
-        samples_x = X
-        samples_y = Y
+#         samples_x = X
+#         samples_y = Y
     
-        return samples_y, rng
+#         return samples_y, rng
 
 class LotkaVolterraSimulator(SBISimulator):
 
