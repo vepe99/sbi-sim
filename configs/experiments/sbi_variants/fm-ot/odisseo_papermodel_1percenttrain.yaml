@@ -15,7 +15,7 @@ learning_rate: 0.001
 
 data:
   target: sbisim.data.benchmarks.OdisseoOTAllParametersPosition_uniformprior_TSIT5_error
-  _file: configs/datasets/benchmarks/20e5_dataset.yaml #Used in the paper
+  _file: configs/datasets/benchmarks/20e5_1percent_dataset.yaml #Used in the paper
   normalization: True
 
 strategy:
